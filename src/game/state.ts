@@ -20,7 +20,7 @@ export function createEmptyLanes(): Lane[] {
 export function initializeNewGame(): GameState {
   const deck = shuffle(createDeck());
   return {
-    phase: 'InitialFlip',
+    phase: 'SuitSelection',
     player1: { hp: STARTING_HP, deck: deck.slice(0, CARDS_PER_PLAYER), hand: [] },
     player2: { hp: STARTING_HP, deck: deck.slice(CARDS_PER_PLAYER, CARDS_PER_PLAYER * 2), hand: [] },
     lanes: createEmptyLanes(),
@@ -31,6 +31,10 @@ export function initializeNewGame(): GameState {
     player2FinalTurnDone: false,
     cardsPlayedThisTurn: 0,
     winner: null,
+    player1Suit: null,
+    player2Suit: null,
+    flipResult: null,
+    fieldControlSuit: null,
   };
 }
 
@@ -49,6 +53,10 @@ export function startNewRound(prevState: GameState): GameState {
     player2FinalTurnDone: false,
     cardsPlayedThisTurn: 0,
     winner: null,
+    player1Suit: prevState.player1Suit,
+    player2Suit: prevState.player2Suit,
+    flipResult: null,
+    fieldControlSuit: null, // Reset for new flip
   };
 }
 

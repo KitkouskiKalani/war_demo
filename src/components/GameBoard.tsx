@@ -1,31 +1,98 @@
 /**
- * GameBoard - Mobile-first Hearthstone-style game interface
+ * GameBoard - Mobile-first game interface with custom art
  * 
  * Layout:
- * - Top: AI facedown hand + AI hero panel below
- * - Middle: Discard (left) | 3 Lanes | End Turn (right)
- * - Bottom: Player hero panel above + Player hand below
+ * - Top: AI facedown hand + AI avatar/HP
+ * - Middle: Draw piles (left) | 3 Lanes | Discard (right)
+ * - Bottom: Player avatar/HP + Player hand
  */
 
 import { useReducer, useEffect, useState, useCallback, useRef } from 'react'
 import { gameReducer, canPlayCardToLane, canEndTurn, executeAITurn } from '../game'
 import { initializeNewGame } from '../game/state'
-import type { LaneId, Lane } from '../game/types'
+import type { LaneId, Lane, StandardSuit } from '../game/types'
 import { CardView } from './CardView'
+
+// Suit to folder name mapping
+const SUIT_FOLDER_MAP: Record<StandardSuit, string> = {
+  hearts: 'Hearts',
+  diamonds: 'Diamonds',
+  clubs: 'Clovers',
+  spades: 'Spades',
+}
+
+// Map suits to environment background images
+const SUIT_TO_ENVIRONMENT: Record<StandardSuit, string> = {
+  hearts: '/assets/environment/Hearts_Play_ENV.png',
+  diamonds: '/assets/environment/Diamonds_Play_ENV.png',
+  clubs: '/assets/environment/Clover_Play_Env.png',
+  spades: '/assets/environment/Spades_Play_ENV.png',
+}
+
+// Get avatar path for a suit
+function getAvatarPath(suit: StandardSuit | null): string {
+  if (!suit) return '/assets/cards/Avatars and Supports/Hearts_Avatar.png'
+  return `/assets/cards/Avatars and Supports/${SUIT_FOLDER_MAP[suit]}_Avatar.png`
+}
+
+// Get support path for a suit
+function getSupportPath(suit: StandardSuit | null): string {
+  if (!suit) return '/assets/cards/Avatars and Supports/Hearts_Support.png'
+  return `/assets/cards/Avatars and Supports/${SUIT_FOLDER_MAP[suit]}_Support.png`
+}
+
+// Get background image based on field control suit
+function getBackgroundImage(fieldControlSuit: StandardSuit | null): string {
+  if (fieldControlSuit) {
+    return SUIT_TO_ENVIRONMENT[fieldControlSuit]
+  }
+  return '/assets/environment/Start_Play_ENV.png'
+}
+
+const DISCARD_BACK = '/assets/cards/Draw and Discard Cards/Card Back - Discard.png'
 
 export function GameBoard() {
   const [state, dispatch] = useReducer(gameReducer, undefined, initializeNewGame)
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null)
   const [isAIThinking, setIsAIThinking] = useState(false)
   const aiExecutingRef = useRef(false)
+  const [flipAnimationStage, setFlipAnimationStage] = useState<'cards' | 'result' | 'damage'>('cards')
 
   const isPlayerTurn = state.currentPlayer === 1
-  const canAct = isPlayerTurn && state.phase === 'Main' && !isAIThinking
+  const canAct = isPlayerTurn && state.phase === 'Main' && !isAIThinking && state.cardsPlayedThisTurn < 3
 
   // Initialize game
   useEffect(() => {
     dispatch({ type: 'START_NEW_GAME' })
   }, [])
+
+  // Handle flip animation stages
+  useEffect(() => {
+    if (state.phase === 'InitialFlipResult') {
+      setFlipAnimationStage('cards')
+      
+      // Stage 1: Show cards (1.5s)
+      const timer1 = setTimeout(() => {
+        setFlipAnimationStage('result')
+      }, 1500)
+
+      // Stage 2: Show result (1.5s more)
+      const timer2 = setTimeout(() => {
+        setFlipAnimationStage('damage')
+      }, 3000)
+
+      // Stage 3: Continue to main phase (1s more)
+      const timer3 = setTimeout(() => {
+        dispatch({ type: 'CONTINUE_FROM_FLIP' })
+      }, 4000)
+
+      return () => {
+        clearTimeout(timer1)
+        clearTimeout(timer2)
+        clearTimeout(timer3)
+      }
+    }
+  }, [state.phase])
 
   // AI Turn Handler
   const executeAI = useCallback(async () => {
@@ -68,6 +135,12 @@ export function GameBoard() {
   }, [state.phase])
 
   // Handlers
+  const handleSuitSelect = (suit: StandardSuit) => {
+    if (state.phase === 'SuitSelection') {
+      dispatch({ type: 'SELECT_SUIT', suit })
+    }
+  }
+
   const handleInitialFlip = () => {
     if (state.phase === 'InitialFlip') dispatch({ type: 'INITIAL_FLIP_STEP' })
   }
@@ -120,13 +193,15 @@ export function GameBoard() {
         className={`lane ${targetable ? 'lane-targetable' : ''}`}
         onClick={() => targetable && handleLaneClick(lane.id)}
       >
-        {/* Opponent cards */}
-        <div className="lane-cards">
+        {/* Opponent cards - stacked vertically */}
+        <div className="lane-cards-stack opponent">
           {lane.player2.cards.length === 0 ? (
-            <span style={{ color: '#4a5568', fontSize: '11px' }}>—</span>
+            <div className="lane-empty">—</div>
           ) : (
-            lane.player2.cards.map(card => (
-              <CardView key={card.id} card={card} small />
+            lane.player2.cards.map((card, idx) => (
+              <div key={card.id} className="stacked-card" style={{ zIndex: idx }}>
+                <CardView card={card} small />
+              </div>
             ))
           )}
         </div>
@@ -137,14 +212,143 @@ export function GameBoard() {
           {targetable && <span style={{ color: '#fbbf24' }}> ▼</span>}
         </div>
 
-        {/* Player cards */}
-        <div className="lane-cards">
+        {/* Player cards - stacked vertically */}
+        <div className="lane-cards-stack player">
           {lane.player1.cards.length === 0 ? (
-            <span style={{ color: '#4a5568', fontSize: '11px' }}>—</span>
+            <div className="lane-empty">—</div>
           ) : (
-            lane.player1.cards.map(card => (
-              <CardView key={card.id} card={card} small />
+            lane.player1.cards.map((card, idx) => (
+              <div key={card.id} className="stacked-card" style={{ zIndex: idx }}>
+                <CardView card={card} small />
+              </div>
             ))
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  // Avatar component with pentagonal frame
+  const Avatar = ({ suit, isPlayer }: { suit: StandardSuit | null; isPlayer: boolean }) => (
+    <div className={`avatar-frame ${isPlayer ? 'player' : 'opponent'}`}>
+      <img src={getAvatarPath(suit)} alt={isPlayer ? 'Player avatar' : 'AI avatar'} />
+    </div>
+  )
+
+  // Support icon component (circular)
+  const SupportIcon = ({ suit }: { suit: StandardSuit | null }) => (
+    <div className="support-icon">
+      <img src={getSupportPath(suit)} alt="Support" />
+    </div>
+  )
+
+  // HP Display component
+  const HPDisplay = ({ hp, isPlayer }: { hp: number; isPlayer: boolean }) => (
+    <div className={`hp-display-box ${isPlayer ? 'player' : 'opponent'}`}>
+      <span className="hp-heart">❤</span>
+      <span className={`hp-value ${hp <= 20 ? 'critical' : ''}`}>{hp}</span>
+    </div>
+  )
+
+  // Draw pile component - now uses field control suit for card back
+  const DrawPile = ({ count }: { count: number }) => (
+    <div className="draw-pile">
+      <CardView 
+        card={{ id: 'draw-pile', suit: 'hearts', rank: 2 }} 
+        faceDown 
+        small 
+        cardBackType="ai"
+        cardBackSuit={state.fieldControlSuit}
+      />
+      <span className="draw-pile-count">{count}</span>
+    </div>
+  )
+
+  // Get dynamic background style
+  const backgroundStyle = {
+    backgroundImage: `url('${getBackgroundImage(state.fieldControlSuit)}')`,
+    backgroundRepeat: 'no-repeat',
+    backgroundPosition: 'center center',
+    backgroundSize: 'cover',
+  }
+
+  // Suit Selection Screen
+  if (state.phase === 'SuitSelection') {
+    return (
+      <div className="game-container">
+        <div className="suit-selection-screen">
+          <h2 className="suit-selection-title">Choose Your Suit</h2>
+          <p className="suit-selection-subtitle">This will determine your champion</p>
+          <div className="suit-options">
+            {(['hearts', 'diamonds', 'clubs', 'spades'] as StandardSuit[]).map(suit => (
+              <button
+                key={suit}
+                className={`suit-option ${suit}`}
+                onClick={() => handleSuitSelect(suit)}
+              >
+                <img src={getAvatarPath(suit)} alt={suit} />
+                <span className="suit-name">{suit.charAt(0).toUpperCase() + suit.slice(1)}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // War Flip Result Animation Screen
+  if (state.phase === 'InitialFlipResult' && state.flipResult) {
+    const { player1Card, player2Card, winner, damage } = state.flipResult
+    const playerWon = winner === 1
+
+    return (
+      <div className="game-container" style={backgroundStyle}>
+        <div className="flip-result-screen">
+          <h2 className="flip-title">WAR FLIP!</h2>
+          
+          {/* Cards Display */}
+          <div className="flip-cards-container">
+            {/* AI Card */}
+            <div className={`flip-card-wrapper ${flipAnimationStage !== 'cards' ? (playerWon ? 'loser' : 'winner') : ''}`}>
+              <div className="flip-card-label">AI</div>
+              <div className="flip-card-display">
+                <CardView card={player2Card} />
+              </div>
+            </div>
+
+            {/* VS */}
+            <div className="flip-vs">VS</div>
+
+            {/* Player Card */}
+            <div className={`flip-card-wrapper ${flipAnimationStage !== 'cards' ? (playerWon ? 'winner' : 'loser') : ''}`}>
+              <div className="flip-card-label">YOU</div>
+              <div className="flip-card-display">
+                <CardView card={player1Card} />
+              </div>
+            </div>
+          </div>
+
+          {/* Result Text */}
+          {flipAnimationStage !== 'cards' && (
+            <div className={`flip-result-text ${playerWon ? 'win' : 'lose'}`}>
+              {playerWon ? 'YOU WIN THE FLIP!' : 'AI WINS THE FLIP!'}
+            </div>
+          )}
+
+          {/* Damage Display */}
+          {flipAnimationStage === 'damage' && damage > 0 && (
+            <div className="flip-damage-display">
+              <span className={playerWon ? 'damage-to-ai' : 'damage-to-player'}>
+                -{damage} HP to {playerWon ? 'AI' : 'You'}
+              </span>
+            </div>
+          )}
+
+          {/* Who goes first */}
+          {flipAnimationStage === 'damage' && (
+            <div className="flip-first-turn">
+              {playerWon ? 'You go first!' : 'AI goes first!'}
+            </div>
           )}
         </div>
       </div>
@@ -155,145 +359,124 @@ export function GameBoard() {
     state.phase === 'Main' && isPlayerTurn ? '#22c55e' :
     state.phase === 'Main' && !isPlayerTurn ? '#ef4444' :
     state.phase === 'InitialFlip' ? '#3b82f6' :
+    state.phase === 'InitialFlipResult' ? '#3b82f6' :
     state.phase === 'EndOfRoundResolving' ? '#f97316' :
     state.phase === 'SuddenDeath' ? '#a855f7' : '#eab308'
 
   return (
-    <div className="game-container">
+    <div className="game-container" style={backgroundStyle}>
       
       {/* ===== TOP: AI Section ===== */}
       <div className="top-section">
-        {/* AI Hand (face down) */}
-        <div style={{ display: 'flex', gap: '3px', justifyContent: 'center' }}>
+        {/* AI Hand (face down with field control suit card back) */}
+        <div className="ai-hand">
           {state.player2.hand.slice(0, 8).map(card => (
-            <CardView key={card.id} card={card} faceDown small />
+            <CardView 
+              key={card.id} 
+              card={card} 
+              faceDown 
+              small 
+              cardBackType="ai" 
+              cardBackSuit={state.fieldControlSuit}
+            />
           ))}
         </div>
 
-        {/* AI Hero Panel (below their cards) */}
-        <div className={`hero-panel opponent ${!isPlayerTurn ? 'active' : ''}`} style={{ color: '#ef4444' }}>
-          <div className="hero-avatar opponent">🤖</div>
-          <div>
-            <div style={{ fontSize: '11px', color: '#9ca3af' }}>AI</div>
-            <div className="hp-display">
-              <span className="heart">❤</span>
-              <span style={{ color: state.player2.hp <= 20 ? '#ef4444' : 'white' }}>{state.player2.hp}</span>
-            </div>
-          </div>
-          <div style={{ fontSize: '11px', color: '#6b7280' }}>📚{state.player2.deck.length}</div>
+        {/* AI Avatar area with HP */}
+        <div className="hero-float opponent">
+          <HPDisplay hp={state.player2.hp} isPlayer={false} />
+          <Avatar suit={state.player2Suit} isPlayer={false} />
+          <SupportIcon suit={state.player2Suit} />
         </div>
       </div>
 
       {/* ===== MIDDLE: Game Board ===== */}
       <div className="middle-section">
-        {/* Phase Banner + Round */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div className="phase-banner" style={{ background: phaseColor, color: '#000' }}>
-            {state.phase === 'Main' && isPlayerTurn && '🎯 YOUR TURN'}
-            {state.phase === 'Main' && !isPlayerTurn && '🤖 AI...'}
-            {state.phase === 'InitialFlip' && '🎲 FLIP'}
-            {state.phase === 'EndOfRoundResolving' && '⚔️ RESOLVE'}
-            {state.phase === 'SuddenDeath' && '💀 SUDDEN'}
-            {state.phase === 'Finished' && (state.winner === 1 ? '🏆 WIN!' : '💔 LOSE')}
-          </div>
-          <div style={{ fontSize: '12px', color: '#6b7280' }}>
-            R<span style={{ color: 'white', fontWeight: 'bold' }}>{state.roundNumber}</span>
-          </div>
-        </div>
-
         {/* Phase-specific buttons */}
         {state.phase === 'InitialFlip' && (
-          <button onClick={handleInitialFlip} style={{
-            padding: '14px 28px', fontSize: '16px', fontWeight: 'bold',
-            background: 'linear-gradient(145deg, #3b82f6, #2563eb)',
-            color: 'white', border: 'none', borderRadius: '10px', cursor: 'pointer'
-          }}>
-            🎲 Flip to Start!
+          <button onClick={handleInitialFlip} className="action-button flip">
+            Flip to Start!
           </button>
         )}
 
         {state.phase === 'SuddenDeath' && (
-          <button onClick={handleSuddenDeath} style={{
-            padding: '14px 28px', fontSize: '16px', fontWeight: 'bold',
-            background: 'linear-gradient(145deg, #a855f7, #7c3aed)',
-            color: 'white', border: 'none', borderRadius: '10px', cursor: 'pointer'
-          }}>
-            ⚔️ Sudden Death
+          <button onClick={handleSuddenDeath} className="action-button sudden">
+            Sudden Death
           </button>
         )}
 
         {state.phase === 'Finished' && (
-          <button onClick={handleNewGame} style={{
-            padding: '14px 28px', fontSize: '16px', fontWeight: 'bold',
-            background: 'linear-gradient(145deg, #eab308, #ca8a04)',
-            color: 'black', border: 'none', borderRadius: '10px', cursor: 'pointer'
-          }}>
-            🔄 Play Again
+          <button onClick={handleNewGame} className="action-button newgame">
+            Play Again
           </button>
         )}
 
-        {/* Board Row: Discard | Lanes | End Turn */}
+        {/* Board Row: Draw Piles | Lanes | Discard + End Turn */}
         {state.phase === 'Main' && (
-          <div className="board-row">
-            {/* Discard Pile - LEFT */}
-            <div className="side-action">
-              <div 
-                className={`discard-pile ${selectedCardId && canAct ? 'discard-pile-targetable' : ''}`}
-                onClick={handleDiscard}
-              >
-                <span style={{ fontSize: '18px' }}>🗑️</span>
-                <span style={{ fontSize: '10px', color: '#9ca3af' }}>{state.discardPile.length}</span>
+          <div className="board-area">
+            <div className="board-row">
+              {/* Draw Piles - LEFT */}
+              <div className="draw-piles-column">
+                <DrawPile count={state.player2.deck.length} />
+                <DrawPile count={state.player1.deck.length} />
               </div>
-              <span style={{ fontSize: '9px', color: '#6b7280' }}>Discard</span>
-            </div>
 
-            {/* The 3 Lanes - CENTER */}
-            <div className="lanes-container">
-              {state.lanes.map(lane => (
-                <LaneView key={lane.id} lane={lane} />
-              ))}
-            </div>
+              {/* The 3 Lanes - CENTER */}
+              <div className="lanes-container">
+                {state.lanes.map(lane => (
+                  <LaneView key={lane.id} lane={lane} />
+                ))}
+              </div>
 
-            {/* End Turn - RIGHT */}
-            <div className="side-action">
-              <button 
-                className="end-turn-btn"
-                onClick={handleEndTurn}
-                disabled={!canEndTurn(state) || !isPlayerTurn}
-              >
-                END<br/>TURN
-              </button>
-              <span style={{ fontSize: '9px', color: '#6b7280' }}>
-                {state.cardsPlayedThisTurn}/3
-              </span>
+              {/* Discard + End Turn - RIGHT */}
+              <div className="side-action-right">
+                <div 
+                  className={`discard-pile ${selectedCardId && canAct ? 'discard-pile-targetable' : ''}`}
+                  onClick={handleDiscard}
+                >
+                  <img src={DISCARD_BACK} alt="Discard pile" className="discard-image" />
+                  <span className="discard-count">{state.discardPile.length}</span>
+                </div>
+                <button 
+                  className="end-turn-btn"
+                  onClick={handleEndTurn}
+                  disabled={!canEndTurn(state) || !isPlayerTurn}
+                >
+                  END<br/>TURN
+                </button>
+                <span className="cards-played">{state.cardsPlayedThisTurn}/3</span>
+              </div>
             </div>
           </div>
         )}
 
+        {/* Phase Banner - Below board, on player's side */}
+        <div className="phase-row">
+          <div className="phase-banner" style={{ background: phaseColor, color: '#000' }}>
+            {state.phase === 'Main' && isPlayerTurn && 'YOUR TURN'}
+            {state.phase === 'Main' && !isPlayerTurn && 'AI TURN'}
+            {state.phase === 'InitialFlip' && 'WAR FLIP'}
+            {state.phase === 'EndOfRoundResolving' && 'RESOLVING'}
+            {state.phase === 'SuddenDeath' && 'SUDDEN DEATH'}
+            {state.phase === 'Finished' && (state.winner === 1 ? 'YOU WIN!' : 'YOU LOSE')}
+          </div>
+        </div>
+
         {/* Hint text */}
         {canAct && state.phase === 'Main' && (
-          <div style={{ 
-            color: selectedCardId ? '#fbbf24' : '#6b7280', 
-            fontSize: '11px', textAlign: 'center'
-          }}>
-            {selectedCardId ? '✨ Tap lane or discard' : '👆 Select a card'}
+          <div className={`hint-text ${selectedCardId ? 'active' : ''}`}>
+            {selectedCardId ? 'Tap lane or discard' : 'Select a card'}
           </div>
         )}
       </div>
 
       {/* ===== BOTTOM: Player Section ===== */}
       <div className="bottom-section">
-        {/* Player Hero Panel (above their cards) */}
-        <div className={`hero-panel player ${isPlayerTurn ? 'active' : ''}`} style={{ color: '#22c55e' }}>
-          <div className="hero-avatar player">👤</div>
-          <div>
-            <div style={{ fontSize: '11px', color: '#9ca3af' }}>You</div>
-            <div className="hp-display">
-              <span className="heart">❤</span>
-              <span style={{ color: state.player1.hp <= 20 ? '#ef4444' : 'white' }}>{state.player1.hp}</span>
-            </div>
-          </div>
-          <div style={{ fontSize: '11px', color: '#6b7280' }}>📚{state.player1.deck.length}</div>
+        {/* Player Avatar area with HP */}
+        <div className="hero-float player">
+          <HPDisplay hp={state.player1.hp} isPlayer={true} />
+          <Avatar suit={state.player1Suit} isPlayer={true} />
+          <SupportIcon suit={state.player1Suit} />
         </div>
 
         {/* Player Hand */}
@@ -308,7 +491,7 @@ export function GameBoard() {
             />
           ))}
           {state.phase === 'Main' && state.player1.hand.length === 0 && (
-            <span style={{ color: '#6b7280', fontSize: '12px' }}>No cards</span>
+            <span className="no-cards">No cards</span>
           )}
         </div>
       </div>

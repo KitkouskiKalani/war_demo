@@ -34,11 +34,20 @@ export interface PlayerState {
 export type CurrentPlayer = 1 | 2;
 
 export type GamePhase = 
+  | 'SuitSelection'
   | 'InitialFlip' 
+  | 'InitialFlipResult'
   | 'Main' 
   | 'EndOfRoundResolving' 
   | 'SuddenDeath'
   | 'Finished';
+
+export interface FlipResult {
+  player1Card: Card;
+  player2Card: Card;
+  winner: CurrentPlayer;
+  damage: number;
+}
 
 export interface GameState {
   phase: GamePhase;
@@ -52,6 +61,10 @@ export interface GameState {
   player2FinalTurnDone: boolean;
   cardsPlayedThisTurn: number;
   winner: CurrentPlayer | null;
+  player1Suit: StandardSuit | null;
+  player2Suit: StandardSuit | null;
+  flipResult: FlipResult | null;
+  fieldControlSuit: StandardSuit | null;
 }
 
 

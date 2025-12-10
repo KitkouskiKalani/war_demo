@@ -2,14 +2,16 @@
  * Game Reducer
  */
 
-import type { Card, CurrentPlayer, GameState, Lane, LaneId, PlayerState } from './types';
+import type { Card, CurrentPlayer, FlipResult, GameState, Lane, LaneId, PlayerState, StandardSuit } from './types';
 import { cardValue, createDeck, findCardById, removeCardById, shuffle } from './deck';
 import { calculateLaneTotal } from './poker';
 import { applyDamage, createEmptyLanes, drawCards, findLane, initializeNewGame, isLaneReadyToResolve, startNewRound, updateLane } from './state';
 
 export type GameAction =
   | { type: 'START_NEW_GAME' }
+  | { type: 'SELECT_SUIT'; suit: StandardSuit }
   | { type: 'INITIAL_FLIP_STEP' }
+  | { type: 'CONTINUE_FROM_FLIP' }
   | { type: 'PLAY_CARD_TO_LANE'; cardId: string; laneId: LaneId }
   | { type: 'DISCARD_CARD'; cardId: string }
   | { type: 'END_TURN' }
@@ -22,10 +24,14 @@ const CARDS_TO_DRAW = 3;
 const CARDS_PER_TURN = 3;
 const MAX_CARDS_PER_LANE = 3;
 
+const ALL_SUITS: StandardSuit[] = ['hearts', 'diamonds', 'clubs', 'spades'];
+
 export function gameReducer(state: GameState, action: GameAction): GameState {
   switch (action.type) {
     case 'START_NEW_GAME': return initializeNewGame();
+    case 'SELECT_SUIT': return handleSelectSuit(state, action.suit);
     case 'INITIAL_FLIP_STEP': return handleInitialFlipStep(state);
+    case 'CONTINUE_FROM_FLIP': return handleContinueFromFlip(state);
     case 'PLAY_CARD_TO_LANE': return handlePlayCardToLane(state, action.cardId, action.laneId);
     case 'DISCARD_CARD': return handleDiscardCard(state, action.cardId);
     case 'END_TURN': return handleEndTurn(state);
@@ -34,6 +40,21 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     case 'SUDDEN_DEATH_STEP': return handleSuddenDeathStep(state);
     default: return state;
   }
+}
+
+function handleSelectSuit(state: GameState, playerSuit: StandardSuit): GameState {
+  if (state.phase !== 'SuitSelection') return state;
+  
+  // AI gets a random suit (excluding player's choice)
+  const availableSuits = ALL_SUITS.filter(s => s !== playerSuit);
+  const aiSuit = availableSuits[Math.floor(Math.random() * availableSuits.length)];
+  
+  return {
+    ...state,
+    phase: 'InitialFlip',
+    player1Suit: playerSuit,
+    player2Suit: aiSuit,
+  };
 }
 
 /**
@@ -69,36 +90,76 @@ function checkGameOver(state: GameState): GameState | null {
 function handleInitialFlipStep(state: GameState): GameState {
   if (state.phase !== 'InitialFlip') return state;
 
-  let player1 = { ...state.player1, deck: [...state.player1.deck] };
-  let player2 = { ...state.player2, deck: [...state.player2.deck] };
-  const flippedCards: Card[] = [];
+  let player1Deck = [...state.player1.deck];
+  let player2Deck = [...state.player2.deck];
+  let player1Card: Card | null = null;
+  let player2Card: Card | null = null;
   let winner: CurrentPlayer | null = null;
   let damageToDeal = 0;
 
-  while (winner === null && player1.deck.length > 0 && player2.deck.length > 0) {
-    const card1 = player1.deck[0];
-    const card2 = player2.deck[0];
-    player1.deck = player1.deck.slice(1);
-    player2.deck = player2.deck.slice(1);
-    flippedCards.push(card1, card2);
+  // Keep flipping until we have a winner (handles ties)
+  while (winner === null && player1Deck.length > 0 && player2Deck.length > 0) {
+    player1Card = player1Deck[0];
+    player2Card = player2Deck[0];
+    player1Deck = player1Deck.slice(1);
+    player2Deck = player2Deck.slice(1);
 
-    const value1 = cardValue(card1);
-    const value2 = cardValue(card2);
+    const value1 = cardValue(player1Card);
+    const value2 = cardValue(player2Card);
 
     if (value1 > value2) { winner = 1; damageToDeal = value1 - value2; }
     else if (value2 > value1) { winner = 2; damageToDeal = value2 - value1; }
   }
 
   if (winner === null) winner = 1;
-  if (winner === 1) player2 = applyDamage(player2, damageToDeal);
-  else player1 = applyDamage(player1, damageToDeal);
+  if (!player1Card || !player2Card) return state;
+
+  const flipResult: FlipResult = {
+    player1Card,
+    player2Card,
+    winner,
+    damage: damageToDeal,
+  };
+
+  // Update decks (cards removed) and store flip result, transition to result phase
+  return { 
+    ...state, 
+    phase: 'InitialFlipResult',
+    player1: { ...state.player1, deck: player1Deck },
+    player2: { ...state.player2, deck: player2Deck },
+    flipResult,
+  };
+}
+
+function handleContinueFromFlip(state: GameState): GameState {
+  if (state.phase !== 'InitialFlipResult' || !state.flipResult) return state;
+
+  const { player1Card, player2Card, winner, damage } = state.flipResult;
+  
+  let player1 = { ...state.player1 };
+  let player2 = { ...state.player2 };
+
+  // Apply damage to loser
+  if (winner === 1) {
+    player2 = applyDamage(player2, damage);
+  } else {
+    player1 = applyDamage(player1, damage);
+  }
+
+  // Add flipped cards to discard
+  const discardPile = [...state.discardPile, player1Card, player2Card];
+
+  // Set field control to winner's suit
+  const fieldControlSuit = winner === 1 ? state.player1Suit : state.player2Suit;
 
   // Check if someone died from the initial flip
   const stateAfterDamage: GameState = {
     ...state,
     player1,
     player2,
-    discardPile: [...state.discardPile, ...flippedCards],
+    discardPile,
+    flipResult: null,
+    fieldControlSuit,
   };
 
   const gameOver = checkGameOver(stateAfterDamage);
@@ -115,9 +176,11 @@ function handleInitialFlipStep(state: GameState): GameState {
     phase: 'Main', 
     player1, 
     player2, 
-    discardPile: [...state.discardPile, ...flippedCards], 
+    discardPile, 
     currentPlayer: winner, 
-    cardsPlayedThisTurn: 0 
+    cardsPlayedThisTurn: 0,
+    flipResult: null,
+    fieldControlSuit,
   };
 }
 
