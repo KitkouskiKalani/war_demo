@@ -183,16 +183,36 @@ export function GameBoard() {
     return canPlayCardToLane(state, selectedCardId, laneId)
   }
 
+  // Get pending resolution info for a lane
+  const getPendingInfo = (laneId: LaneId) => {
+    return state.pendingResolutionLanes.find(p => p.laneId === laneId)
+  }
+
   // Lane component
   const LaneView = ({ lane }: { lane: Lane }) => {
     const targetable = isLaneTargetable(lane.id)
     const labels: Record<string, string> = { left: 'Left', middle: 'Mid', right: 'Right' }
+    const pendingInfo = getPendingInfo(lane.id)
+    
+    // Determine glow class based on turns until resolution
+    const glowClass = pendingInfo 
+      ? pendingInfo.turnsUntilResolution === 2 
+        ? 'lane-glow-warning' 
+        : 'lane-glow-danger'
+      : ''
 
     return (
       <div 
-        className={`lane ${targetable ? 'lane-targetable' : ''}`}
+        className={`lane ${targetable ? 'lane-targetable' : ''} ${glowClass}`}
         onClick={() => targetable && handleLaneClick(lane.id)}
       >
+        {/* Pending resolution indicator */}
+        {pendingInfo && (
+          <div className={`lane-pending-indicator ${pendingInfo.turnsUntilResolution === 1 ? 'urgent' : ''}`}>
+            Resolves in {pendingInfo.turnsUntilResolution}
+          </div>
+        )}
+
         {/* Opponent cards - stacked vertically */}
         <div className="lane-cards-stack opponent">
           {lane.player2.cards.length === 0 ? (
@@ -200,7 +220,7 @@ export function GameBoard() {
           ) : (
             lane.player2.cards.map((card, idx) => (
               <div key={card.id} className="stacked-card" style={{ zIndex: idx }}>
-                <CardView card={card} small />
+                <CardView card={card} small ownerSuit={state.player2Suit} />
               </div>
             ))
           )}
@@ -219,7 +239,7 @@ export function GameBoard() {
           ) : (
             lane.player1.cards.map((card, idx) => (
               <div key={card.id} className="stacked-card" style={{ zIndex: idx }}>
-                <CardView card={card} small />
+                <CardView card={card} small ownerSuit={state.player1Suit} />
               </div>
             ))
           )}
@@ -312,7 +332,7 @@ export function GameBoard() {
             <div className={`flip-card-wrapper ${flipAnimationStage !== 'cards' ? (playerWon ? 'loser' : 'winner') : ''}`}>
               <div className="flip-card-label">AI</div>
               <div className="flip-card-display">
-                <CardView card={player2Card} />
+                <CardView card={player2Card} ownerSuit={state.player2Suit} />
               </div>
             </div>
 
@@ -323,7 +343,7 @@ export function GameBoard() {
             <div className={`flip-card-wrapper ${flipAnimationStage !== 'cards' ? (playerWon ? 'winner' : 'loser') : ''}`}>
               <div className="flip-card-label">YOU</div>
               <div className="flip-card-display">
-                <CardView card={player1Card} />
+                <CardView card={player1Card} ownerSuit={state.player1Suit} />
               </div>
             </div>
           </div>
@@ -488,6 +508,7 @@ export function GameBoard() {
               selected={selectedCardId === card.id}
               onClick={() => handleCardClick(card.id)}
               disabled={!canAct}
+              ownerSuit={state.player1Suit}
             />
           ))}
           {state.phase === 'Main' && state.player1.hand.length === 0 && (

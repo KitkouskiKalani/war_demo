@@ -2,10 +2,11 @@
  * Game Reducer
  */
 
-import type { Card, CurrentPlayer, FlipResult, GameState, Lane, LaneId, PlayerState, StandardSuit } from './types';
+import type { Card, CurrentPlayer, FlipResult, GameState, Lane, LaneId, PendingLaneResolution, PlayerState, StandardSuit } from './types';
 import { cardValue, createDeck, findCardById, removeCardById, shuffle } from './deck';
 import { calculateLaneTotal } from './poker';
 import { applyDamage, createEmptyLanes, drawCards, findLane, initializeNewGame, isLaneReadyToResolve, startNewRound, updateLane } from './state';
+import { applySuitEffectsToLaneDamage, calculateLaneSuitEffects } from './suitEffects';
 
 export type GameAction =
   | { type: 'START_NEW_GAME' }
@@ -181,6 +182,7 @@ function handleContinueFromFlip(state: GameState): GameState {
     cardsPlayedThisTurn: 0,
     flipResult: null,
     fieldControlSuit,
+    pendingResolutionLanes: [],
   };
 }
 
@@ -195,6 +197,7 @@ function handlePlayCardToLane(state: GameState, cardId: string, laneId: LaneId):
   if (!lane) return state;
 
   const playerSide = state.currentPlayer === 1 ? lane.player1 : lane.player2;
+  const opponentSide = state.currentPlayer === 1 ? lane.player2 : lane.player1;
   if (playerSide.cards.length >= MAX_CARDS_PER_LANE) return state;
 
   if (playerSide.cards.length > 0) {
@@ -219,15 +222,55 @@ function handlePlayCardToLane(state: GameState, cardId: string, laneId: LaneId):
     cardsPlayedThisTurn: state.cardsPlayedThisTurn + 1,
   };
 
-  // Check if lane is ready to resolve (both sides have 3 cards)
+  // Check if this play fills the current player's side of the lane (3 cards)
   const laneAfterPlay = findLane(newState.lanes, laneId)!;
-  if (isLaneReadyToResolve(laneAfterPlay)) {
-    newState = resolveLane(newState, laneId);
-    
-    // Check if someone died from lane resolution
-    const gameOver = checkGameOver(newState);
-    if (gameOver) {
-      return gameOver;
+  const newPlayerSide = state.currentPlayer === 1 ? laneAfterPlay.player1 : laneAfterPlay.player2;
+  const newOpponentSide = state.currentPlayer === 1 ? laneAfterPlay.player2 : laneAfterPlay.player1;
+
+  if (newPlayerSide.cards.length === MAX_CARDS_PER_LANE) {
+    // Current player just filled their side of the lane
+    if (newOpponentSide.cards.length === MAX_CARDS_PER_LANE) {
+      // Both sides full - resolve immediately
+      newState = resolveLane(newState, laneId);
+      
+      // Remove from pending if it was there
+      newState = {
+        ...newState,
+        pendingResolutionLanes: newState.pendingResolutionLanes.filter(p => p.laneId !== laneId),
+      };
+      
+      // Check if someone died from lane resolution
+      const gameOver = checkGameOver(newState);
+      if (gameOver) {
+        return gameOver;
+      }
+    } else {
+      // Only current player has filled - add to pending (opponent gets one turn to respond)
+      // But first check if this lane was already pending from opponent - if so, resolve now
+      const existingPending = newState.pendingResolutionLanes.find(p => p.laneId === laneId);
+      if (existingPending) {
+        // This shouldn't happen normally, but handle it
+        newState = resolveLane(newState, laneId);
+        newState = {
+          ...newState,
+          pendingResolutionLanes: newState.pendingResolutionLanes.filter(p => p.laneId !== laneId),
+        };
+        const gameOver = checkGameOver(newState);
+        if (gameOver) {
+          return gameOver;
+        }
+      } else {
+        // Add to pending with 2 turns until resolution
+        const newPending: PendingLaneResolution = {
+          laneId,
+          filledByPlayer: state.currentPlayer,
+          turnsUntilResolution: 2, // Opponent gets 2 turns to respond
+        };
+        newState = {
+          ...newState,
+          pendingResolutionLanes: [...newState.pendingResolutionLanes, newPending],
+        };
+      }
     }
   }
 
@@ -262,6 +305,52 @@ function handleDiscardCard(state: GameState, cardId: string): GameState {
   return newState;
 }
 
+/**
+ * Process pending lanes at the start of a player's turn.
+ * Decrements countdown for lanes filled by this player and resolves when countdown reaches 0.
+ */
+function processPendingLanesForPlayer(state: GameState, player: CurrentPlayer): GameState {
+  let newState = { ...state };
+  const playerPendingLanes = newState.pendingResolutionLanes.filter(p => p.filledByPlayer === player);
+  const otherPendingLanes = newState.pendingResolutionLanes.filter(p => p.filledByPlayer !== player);
+  
+  const lanesToResolve: PendingLaneResolution[] = [];
+  const lanesToKeep: PendingLaneResolution[] = [];
+  
+  for (const pending of playerPendingLanes) {
+    const newTurns = pending.turnsUntilResolution - 1;
+    if (newTurns <= 0) {
+      // Time's up - resolve this lane
+      lanesToResolve.push(pending);
+    } else {
+      // Decrement counter, keep pending
+      lanesToKeep.push({
+        ...pending,
+        turnsUntilResolution: newTurns,
+      });
+    }
+  }
+  
+  // Resolve lanes that hit 0
+  for (const pending of lanesToResolve) {
+    newState = resolveLane(newState, pending.laneId);
+    
+    // Check if someone died
+    const gameOver = checkGameOver(newState);
+    if (gameOver) {
+      return gameOver;
+    }
+  }
+  
+  // Update pending lanes list
+  newState = {
+    ...newState,
+    pendingResolutionLanes: [...otherPendingLanes, ...lanesToKeep],
+  };
+  
+  return newState;
+}
+
 function handleEndTurn(state: GameState): GameState {
   if (state.phase !== 'Main' || state.cardsPlayedThisTurn < CARDS_PER_TURN) return state;
 
@@ -288,24 +377,96 @@ function handleEndTurn(state: GameState): GameState {
   }
 
   if (player1FinalTurnDone && player2FinalTurnDone) {
-    return { ...state, phase: 'EndOfRoundResolving', player1, player2, discardPile, player1FinalTurnDone, player2FinalTurnDone, cardsPlayedThisTurn: 0 };
+    return { 
+      ...state, 
+      phase: 'EndOfRoundResolving', 
+      player1, 
+      player2, 
+      discardPile, 
+      player1FinalTurnDone, 
+      player2FinalTurnDone, 
+      cardsPlayedThisTurn: 0,
+      pendingResolutionLanes: [], // Clear pending - all will resolve at end of round
+    };
   }
 
-  return { ...state, player1, player2, discardPile, currentPlayer: currentPlayer === 1 ? 2 : 1, player1FinalTurnDone, player2FinalTurnDone, cardsPlayedThisTurn: 0 };
+  // Switch to next player
+  const nextPlayer: CurrentPlayer = currentPlayer === 1 ? 2 : 1;
+  
+  let newState: GameState = { 
+    ...state, 
+    player1, 
+    player2, 
+    discardPile, 
+    currentPlayer: nextPlayer, 
+    player1FinalTurnDone, 
+    player2FinalTurnDone, 
+    cardsPlayedThisTurn: 0 
+  };
+
+  // At the start of the next player's turn, process pending lanes they filled
+  // (decrement countdown, resolve if countdown reaches 0)
+  newState = processPendingLanesForPlayer(newState, nextPlayer);
+  
+  // Check if game ended from resolution
+  if (newState.phase === 'Finished' || newState.phase === 'SuddenDeath') {
+    return newState;
+  }
+
+  return newState;
 }
 
 function resolveLane(state: GameState, laneId: LaneId): GameState {
   const lane = findLane(state.lanes, laneId);
   if (!lane) return state;
 
+  // Calculate base lane totals (card values + poker bonuses)
   const p1Total = calculateLaneTotal(lane.player1.cards);
   const p2Total = calculateLaneTotal(lane.player2.cards);
+
+  // Calculate suit effects for each player's active cards
+  const p1Effects = calculateLaneSuitEffects(lane.player1.cards, state.player1Suit);
+  const p2Effects = calculateLaneSuitEffects(lane.player2.cards, state.player2Suit);
 
   let player1 = { ...state.player1 };
   let player2 = { ...state.player2 };
 
-  if (p1Total > p2Total) player2 = applyDamage(player2, p1Total - p2Total);
-  else if (p2Total > p1Total) player1 = applyDamage(player1, p2Total - p1Total);
+  if (p1Total > p2Total) {
+    // Player 1 wins this lane
+    const baseDamage = p1Total - p2Total;
+    const { finalDamage, healingOverflow } = applySuitEffectsToLaneDamage(
+      baseDamage,
+      p1Effects.totalDamage,  // Winner's damage bonus
+      p2Effects.totalHealing  // Loser's healing mitigation
+    );
+    
+    // Apply damage to player 2
+    if (finalDamage > 0) {
+      player2 = applyDamage(player2, finalDamage);
+    }
+    // Apply overflow healing to player 2 (they mitigated more than the damage)
+    if (healingOverflow > 0) {
+      player2 = { ...player2, hp: player2.hp + healingOverflow };
+    }
+  } else if (p2Total > p1Total) {
+    // Player 2 wins this lane
+    const baseDamage = p2Total - p1Total;
+    const { finalDamage, healingOverflow } = applySuitEffectsToLaneDamage(
+      baseDamage,
+      p2Effects.totalDamage,  // Winner's damage bonus
+      p1Effects.totalHealing  // Loser's healing mitigation
+    );
+    
+    // Apply damage to player 1
+    if (finalDamage > 0) {
+      player1 = applyDamage(player1, finalDamage);
+    }
+    // Apply overflow healing to player 1 (they mitigated more than the damage)
+    if (healingOverflow > 0) {
+      player1 = { ...player1, hp: player1.hp + healingOverflow };
+    }
+  }
+  // If tied, no damage is dealt
 
   const laneCards = [...lane.player1.cards, ...lane.player2.cards];
   const clearedLane: Lane = { ...lane, player1: { cards: [] }, player2: { cards: [] } };

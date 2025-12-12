@@ -35,6 +35,7 @@ export function initializeNewGame(): GameState {
     player2Suit: null,
     flipResult: null,
     fieldControlSuit: null,
+    pendingResolutionLanes: [],
   };
 }
 
@@ -57,6 +58,7 @@ export function startNewRound(prevState: GameState): GameState {
     player2Suit: prevState.player2Suit,
     flipResult: null,
     fieldControlSuit: null, // Reset for new flip
+    pendingResolutionLanes: [],
   };
 }
 

@@ -1,14 +1,17 @@
 /**
- * Simple AI for War-Lanes Poker
+ * AI for War-Lanes Poker
  * 
- * AI Strategy:
- * - Prioritize playing high-value cards to lanes where it can win
- * - Try to form poker bonuses (pairs, straights, flushes)
- * - Avoid discarding high-value cards (self-damage)
- * - Focus on lanes where opponent is weak
+ * AI Strategy (v2 - Improved):
+ * 1. URGENCY: Respond to lanes where player has 3 cards (pending resolution)
+ * 2. COMPLETE: Try to complete lanes where AI has 2 cards
+ * 3. BUILD: Continue building in lanes where AI has cards
+ * 4. START: Start new lanes with lowest value cards
+ * 5. DISCARD: Only as last resort (no legal plays)
+ * 
+ * General principle: Play lowest cards first, save high cards for later
  */
 
-import type { Card, GameState, LaneId } from './types';
+import type { Card, GameState, LaneId, Lane } from './types';
 import { cardValue } from './deck';
 import { calculateLaneTotal } from './poker';
 import { canPlayCardToLane } from './reducer';
@@ -20,6 +23,7 @@ export interface AIMove {
 }
 
 const LANE_IDS: LaneId[] = ['left', 'middle', 'right'];
+const MAX_CARDS_PER_LANE = 3;
 
 /**
  * Get the AI's next move.
@@ -30,44 +34,107 @@ export function getAIMove(state: GameState): AIMove | null {
   const hand = state.player2.hand;
   if (hand.length === 0) return null;
 
-  // Sort hand by value (prefer playing lower cards first, save high cards)
+  // Sort hand by value (play lowest cards first)
   const sortedHand = [...hand].sort((a, b) => cardValue(a) - cardValue(b));
 
-  // Try to find the best lane play
-  const bestLanePlay = findBestLanePlay(state, sortedHand);
-  if (bestLanePlay) {
-    return bestLanePlay;
+  // Priority 1: Respond to URGENT lanes (player has 3 cards, will auto-resolve next turn)
+  const urgentMove = findUrgentLanePlay(state, sortedHand);
+  if (urgentMove) {
+    return urgentMove;
   }
 
-  // If no legal lane play, discard the lowest value card to minimize self-damage
+  // Priority 2-4: Find best strategic lane play
+  const strategicMove = findStrategicLanePlay(state, sortedHand);
+  if (strategicMove) {
+    return strategicMove;
+  }
+
+  // Priority 5: Discard lowest card as last resort
   const lowestCard = sortedHand[0];
   return { type: 'discard', cardId: lowestCard.id };
 }
 
 /**
- * Find the best lane to play a card to.
+ * Find urgent lane plays - lanes where player has 3 cards (pending resolution).
+ * AI MUST respond to these or lose the lane by default.
  */
-function findBestLanePlay(state: GameState, sortedHand: Card[]): AIMove | null {
-  let bestMove: AIMove | null = null;
-  let bestScore = -Infinity;
+function findUrgentLanePlay(state: GameState, sortedHand: Card[]): AIMove | null {
+  // Find lanes where player (player1) has 3 cards but AI doesn't
+  const urgentLanes = state.lanes.filter(lane => 
+    lane.player1.cards.length === MAX_CARDS_PER_LANE && 
+    lane.player2.cards.length < MAX_CARDS_PER_LANE
+  );
 
-  for (const card of sortedHand) {
-    for (const laneId of LANE_IDS) {
-      if (canPlayCardToLane(state, card.id, laneId)) {
-        const score = evaluateLanePlay(state, card, laneId);
-        if (score > bestScore) {
-          bestScore = score;
-          bestMove = { type: 'lane', cardId: card.id, laneId };
-        }
+  if (urgentLanes.length === 0) return null;
+
+  // For each urgent lane, try to play a card (lowest first)
+  for (const lane of urgentLanes) {
+    for (const card of sortedHand) {
+      if (canPlayCardToLane(state, card.id, lane.id)) {
+        return { type: 'lane', cardId: card.id, laneId: lane.id };
       }
     }
   }
 
-  return bestMove;
+  return null;
 }
 
 /**
- * Evaluate how good a lane play is.
+ * Find strategic lane plays following priority order:
+ * 1. Complete lanes (AI has 2 cards)
+ * 2. Add to existing lanes (AI has 1 card)
+ * 3. Start new lanes
+ */
+function findStrategicLanePlay(state: GameState, sortedHand: Card[]): AIMove | null {
+  // Priority 2: Complete lanes where AI has 2 cards
+  const almostCompleteLanes = state.lanes.filter(lane => 
+    lane.player2.cards.length === 2
+  );
+  for (const lane of almostCompleteLanes) {
+    for (const card of sortedHand) {
+      if (canPlayCardToLane(state, card.id, lane.id)) {
+        return { type: 'lane', cardId: card.id, laneId: lane.id };
+      }
+    }
+  }
+
+  // Priority 3: Add to lanes where AI has 1 card
+  const lanesWithOneCard = state.lanes.filter(lane => 
+    lane.player2.cards.length === 1
+  );
+  // Prefer lanes where player also has cards (contest them)
+  const contestedLanes = lanesWithOneCard.filter(lane => lane.player1.cards.length > 0);
+  const uncontectedLanes = lanesWithOneCard.filter(lane => lane.player1.cards.length === 0);
+  
+  for (const lane of [...contestedLanes, ...uncontectedLanes]) {
+    for (const card of sortedHand) {
+      if (canPlayCardToLane(state, card.id, lane.id)) {
+        return { type: 'lane', cardId: card.id, laneId: lane.id };
+      }
+    }
+  }
+
+  // Priority 4: Start new lanes with lowest cards
+  const emptyLanes = state.lanes.filter(lane => 
+    lane.player2.cards.length === 0
+  );
+  // Prefer lanes where player has cards (contest) over empty lanes
+  const playerStartedLanes = emptyLanes.filter(lane => lane.player1.cards.length > 0);
+  const fullyEmptyLanes = emptyLanes.filter(lane => lane.player1.cards.length === 0);
+  
+  for (const lane of [...playerStartedLanes, ...fullyEmptyLanes]) {
+    for (const card of sortedHand) {
+      if (canPlayCardToLane(state, card.id, lane.id)) {
+        return { type: 'lane', cardId: card.id, laneId: lane.id };
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Evaluate how good a lane play is (used for tie-breaking if needed).
  * Higher score = better play.
  */
 function evaluateLanePlay(state: GameState, card: Card, laneId: LaneId): number {
@@ -77,65 +144,63 @@ function evaluateLanePlay(state: GameState, card: Card, laneId: LaneId): number 
 
   let score = 0;
 
-  // Base score: card value contributes to lane total
-  score += cardValue(card);
-
-  // Bonus: prefer lanes where we're already invested
-  score += aiSide.cards.length * 5;
-
-  // Bonus: prefer lanes where we can complete (get to 3 cards)
-  if (aiSide.cards.length === 2) {
-    score += 15; // About to complete a lane
+  // Urgency: Player has 3 cards - must respond!
+  if (playerSide.cards.length === MAX_CARDS_PER_LANE) {
+    score += 1000; // Highest priority
   }
+
+  // Completion bonus: About to fill the lane
+  if (aiSide.cards.length === 2) {
+    score += 100;
+  }
+
+  // Building bonus: Continue in existing lane
+  if (aiSide.cards.length === 1) {
+    score += 50;
+  }
+
+  // Prefer lower value cards (save high cards)
+  score -= cardValue(card) * 2;
 
   // Evaluate potential poker bonus
   const potentialCards = [...aiSide.cards, card];
   const currentTotal = calculateLaneTotal(aiSide.cards);
   const newTotal = calculateLaneTotal(potentialCards);
   const bonusGained = newTotal - currentTotal - cardValue(card);
-  score += bonusGained * 2; // Weight bonus formation highly
+  score += bonusGained * 3; // Weight bonus formation highly
 
-  // Consider opponent's strength in this lane
+  // Consider opponent's strength
   const opponentTotal = calculateLaneTotal(playerSide.cards);
   
-  // If opponent has cards, prefer lanes where we can win
   if (playerSide.cards.length > 0) {
     if (newTotal > opponentTotal) {
-      score += 10; // We'd be winning this lane
-    } else if (newTotal < opponentTotal) {
-      score -= 5; // We'd be losing, but might catch up
+      score += 20; // Winning the lane
+    } else if (newTotal < opponentTotal && aiSide.cards.length === 2) {
+      score -= 10; // Completing a losing lane is bad
     }
   }
 
-  // Prefer empty lanes slightly (spread out initially)
-  if (aiSide.cards.length === 0 && playerSide.cards.length === 0) {
-    score += 3;
-  }
-
-  // Slight preference for middle lane (strategic position)
-  if (laneId === 'middle') {
-    score += 2;
-  }
-
-  // Check for potential pairs/straights with existing cards
+  // Check for potential pairs/straights/flushes
   if (aiSide.cards.length > 0) {
     const existingRanks = aiSide.cards.map(c => c.rank);
-    // Bonus for forming a pair
+    // Pair bonus
     if (existingRanks.includes(card.rank)) {
-      score += 8;
+      score += 15;
     }
-    // Bonus for potential straight
-    const values = [...aiSide.cards.map(c => cardValue(c)), cardValue(card)].sort((a, b) => a - b);
-    if (values.length >= 2) {
-      const isConsecutive = values.every((v, i) => i === 0 || v === values[i - 1] + 1);
-      if (isConsecutive) {
-        score += 10;
-      }
-    }
-    // Bonus for flush potential
+    // Flush potential
     const existingSuits = aiSide.cards.map(c => c.suit);
     if (existingSuits.every(s => s === card.suit)) {
-      score += 8;
+      score += 12;
+    }
+    // Straight potential
+    const values = [...aiSide.cards.map(c => cardValue(c)), cardValue(card)].sort((a, b) => a - b);
+    if (values.length >= 2) {
+      const gaps = values.slice(1).map((v, i) => v - values[i]);
+      if (gaps.every(g => g === 1)) {
+        score += 15; // Consecutive cards
+      } else if (gaps.every(g => g <= 2)) {
+        score += 8; // Close to straight
+      }
     }
   }
 
@@ -199,5 +264,4 @@ function simulateMove(state: GameState, move: AIMove): GameState {
     cardsPlayedThisTurn: state.cardsPlayedThisTurn + 1,
   };
 }
-
 

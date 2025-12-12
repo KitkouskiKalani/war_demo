@@ -455,6 +455,7 @@ body {
   flex-shrink: 0;
   height: 260px;
   justify-content: space-between;
+  position: relative;
 }
 
 @media (min-width: 640px) {
@@ -473,6 +474,67 @@ body {
 
 .lane-targetable:hover {
   box-shadow: 0 0 30px rgba(251, 191, 36, 0.6), inset 0 0 20px rgba(251, 191, 36, 0.2);
+}
+
+/* Lane glow effects for pending resolution */
+.lane-glow-warning {
+  border-color: #eab308;
+  box-shadow: 0 0 15px rgba(234, 179, 8, 0.5), 0 0 30px rgba(234, 179, 8, 0.3), inset 0 0 10px rgba(234, 179, 8, 0.1);
+  animation: pulse-warning 2s ease-in-out infinite;
+}
+
+.lane-glow-danger {
+  border-color: #ef4444;
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.6), 0 0 40px rgba(239, 68, 68, 0.4), inset 0 0 15px rgba(239, 68, 68, 0.15);
+  animation: pulse-danger 1s ease-in-out infinite;
+}
+
+@keyframes pulse-warning {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(234, 179, 8, 0.5), 0 0 30px rgba(234, 179, 8, 0.3), inset 0 0 10px rgba(234, 179, 8, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(234, 179, 8, 0.7), 0 0 45px rgba(234, 179, 8, 0.4), inset 0 0 15px rgba(234, 179, 8, 0.15);
+  }
+}
+
+@keyframes pulse-danger {
+  0%, 100% {
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.6), 0 0 40px rgba(239, 68, 68, 0.4), inset 0 0 15px rgba(239, 68, 68, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 35px rgba(239, 68, 68, 0.8), 0 0 55px rgba(239, 68, 68, 0.5), inset 0 0 20px rgba(239, 68, 68, 0.2);
+  }
+}
+
+/* Pending resolution indicator */
+.lane-pending-indicator {
+  position: absolute;
+  top: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(234, 179, 8, 0.95);
+  color: #000;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  z-index: 10;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.lane-pending-indicator.urgent {
+  background: rgba(239, 68, 68, 0.95);
+  color: #fff;
+  animation: shake 0.5s ease-in-out infinite;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(-50%) rotate(0deg); }
+  25% { transform: translateX(-50%) rotate(-2deg); }
+  75% { transform: translateX(-50%) rotate(2deg); }
 }
 
 .lane-label {

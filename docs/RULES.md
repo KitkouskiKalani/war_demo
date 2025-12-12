@@ -1,4 +1,4 @@
-# War-Lanes Poker – Game Rules v1.1
+# War-Lanes Poker – Game Rules v1.3
 
 ## Overview
 
@@ -147,9 +147,23 @@ Each lane is shared: there is a left lane, middle lane, and right lane. Each pla
 - A lane is considered **complete for a player** when that player has placed **3 cards** in that lane.
 - A lane is considered **ready to resolve** when **both players** have exactly **3 cards** in that same lane (3 on each side, 6 total).
 
-### Immediate Lane Resolution
+### Delayed Lane Resolution (v1.2)
 
-As soon as the **6th card** in a lane (the 3rd for the second player to fill that lane) is played, that lane **resolves immediately**, even if other lanes are still incomplete.
+When a player fills a lane (places their 3rd card), the lane enters a **pending resolution** state. The opponent then has **two turns to respond** before the lane automatically resolves.
+
+**Resolution Rules:**
+
+1. **Immediate Resolution (Both Filled)**: If both players have exactly 3 cards in a lane (the 6th card is played), the lane **resolves immediately**.
+
+2. **Delayed Resolution (Two-Turn Response Window)**: When Player A fills a lane (places their 3rd card) and Player B has fewer than 3 cards:
+   - The lane is marked as **pending resolution** with a 2-turn countdown.
+   - Player B gets their next **two turns** to respond (they can add cards to the lane if they have legal plays).
+   - At the **start of Player A's turn after 2 full rounds**, the lane **automatically resolves** regardless of how many cards Player B has.
+   - A visual indicator shows "Resolves in 2" (yellow glow) or "Resolves in 1" (red glow).
+   
+3. **Default Win**: If a player has 3 cards in a lane and their opponent has 0 cards when the lane resolves, the filling player's total is compared against 0, dealing full damage.
+
+This system gives defenders two opportunities to respond to a filled lane before being forced to accept the resolution.
 
 #### Lane Resolution Procedure
 
@@ -284,13 +298,66 @@ Damage can occur in four main ways:
    - Higher card deals damage equal to value difference.
 2. **Immediate lane resolution** when both sides of a lane reach 3 cards:
    - Higher lane total (base + bonus) deals damage equal to lane total difference.
+   - Active card suit effects (damage bonus/healing) are applied (v1.3).
 3. **End-of-round full-board resolution**:
    - All lanes resolve; each winner per lane deals damage equal to lane total difference.
+   - Active card suit effects (damage bonus/healing) are applied (v1.3).
 4. **Discard damage**:
    - Whenever a player discards a card directly from hand to the discard pile, that player takes damage equal to the **value of that card**.
    - This applies for every such discard, and discarding is always allowed.
 
-These rules define the complete behavior for the v1.1 implementation.
+These rules define the complete behavior for the v1.3 implementation.
+
+---
+
+## Active Cards and Suit Effects (v1.3)
+
+At the start of the game, each player chooses a suit. Cards of their chosen suit become "active" and provide special effects.
+
+### Visual Distinction
+
+- **Active Cards**: Displayed in full color
+- **Inactive Cards**: Displayed in grayscale
+- **Jokers**: Always count as active for their owner
+
+### Suit Effect Types
+
+Each suit provides a unique effect when active cards are played in lanes:
+
+**Damage Suits (Diamonds, Spades)**
+- Active cards add bonus damage when their lane resolves
+- The bonus is added to the total damage dealt to the opponent
+
+**Healing Suits (Hearts, Clubs)**
+- Active cards provide healing when their lane resolves
+- First, healing reduces incoming damage
+- Any remaining healing after damage mitigation restores HP
+
+### Effect Values by Card Rank
+
+| Card Ranks | Effect Value |
+|------------|--------------|
+| 2, 3, 4, 5 | +7 |
+| 6, 7, 8, 9, 10 | +5 |
+| J, Q, K, Joker | +3 |
+
+### Lane Resolution with Suit Effects
+
+When a lane resolves:
+
+1. Calculate base lane totals (card values + poker bonuses)
+2. Determine the winner (higher total)
+3. Calculate base damage (winner total - loser total)
+4. Add winner's damage bonus (if any active Diamonds/Spades cards)
+5. Subtract loser's healing (if any active Hearts/Clubs cards)
+6. Apply final damage (minimum 0)
+7. If healing exceeds damage, overflow restores loser's HP
+
+**Example:**
+- Player (Diamonds) has 3 active cards with +7, +5, +3 bonus = +15 damage
+- AI (Hearts) has 2 active cards with +5, +3 bonus = +8 healing
+- Base damage to AI: 10
+- With bonuses: 10 + 15 - 8 = 17 final damage to AI
 
 ---
 
@@ -304,4 +371,27 @@ The poker bonus values were rebalanced from v1.0 to account for:
 - **Flush** reduced from +10 to +8 (slightly easier than straights)
 - **Straight flush** reduced from +25 to +20 (still best, but less swingy)
 - **Straight** unchanged at +10 (hardest to set up intentionally)
+
+---
+
+## Lane Resolution Changes (v1.2)
+
+The lane resolution system was updated in v1.2 to provide more strategic depth:
+
+- **Delayed Resolution**: Instead of lanes only resolving when both players have 3 cards, a filled lane now auto-resolves after a 2-turn countdown
+- **Response Window**: The opponent gets exactly two turns to respond to a filled lane
+- **Visual Indicators**: Pending lanes display "Resolves in X" text and glow (yellow for 2 turns, red for 1 turn)
+- **Strategic Implications**: Players have more time to respond, creating opportunities for tactical counterplay
+
+### AI Strategy (v1.2)
+
+The AI opponent uses the following priority system:
+
+1. **Urgency First**: Respond to opponent-filled lanes that will auto-resolve next turn
+2. **Complete Lanes**: Fill lanes where AI has 2 cards
+3. **Build Lanes**: Continue building in lanes where AI has 1 card
+4. **Start Lanes**: Begin new lanes with lowest value cards
+5. **Discard**: Only as absolute last resort (when no legal lane plays exist)
+
+General principle: AI plays lowest value cards first to preserve high-value cards for later turns.
 

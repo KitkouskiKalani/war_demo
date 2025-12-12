@@ -1,5 +1,6 @@
 /**
  * CardView Component - Image-based card rendering
+ * Supports active (color) and inactive (grayscale) card art based on owner's chosen suit
  */
 
 import type { Card, StandardSuit } from '../game/types'
@@ -13,6 +14,7 @@ interface CardViewProps {
   small?: boolean
   cardBackType?: 'ai' | 'discard'  // ai = dynamic suit back, discard = Discard back
   cardBackSuit?: StandardSuit | null  // For dynamic card backs based on field control
+  ownerSuit?: StandardSuit | null  // The suit chosen by the card's owner (for active/inactive art)
 }
 
 // Map internal suit names to asset folder names
@@ -34,19 +36,35 @@ function getRankString(rank: number | string): string {
   return String(rank)
 }
 
-// Get the image path for a face-up card
-function getCardImagePath(card: Card): string {
+// Check if a card is "active" (matches the owner's chosen suit)
+function isCardActive(card: Card, ownerSuit: StandardSuit | null | undefined): boolean {
+  if (!ownerSuit) return true // If no owner suit specified, default to active
+  // Jokers are always active for their owner
+  if (card.rank === 'JOKER') return true
+  return card.suit === ownerSuit
+}
+
+// Get the image path for a face-up card (active = color, inactive = grayscale)
+function getCardImagePath(card: Card, ownerSuit?: StandardSuit | null): string {
   const suitFolder = SUIT_TO_FOLDER[card.suit] || 'Hearts'
   const rankStr = getRankString(card.rank)
+  const isActive = isCardActive(card, ownerSuit)
   
   // Jokers are stored as [Suit]_Joker.png in each suit folder
   if (card.rank === 'JOKER') {
-    // Use the suit from the card for joker (they're in each suit folder)
     const jokerSuit = card.suit === 'joker' ? 'Hearts' : suitFolder
-    return `/assets/cards/Active Cards - Color/${jokerSuit} - Active Cards/${jokerSuit}_Joker.png`
+    if (isActive) {
+      return `/assets/cards/Active Cards - Color/${jokerSuit} - Active Cards/${jokerSuit}_Joker.png`
+    } else {
+      return `/assets/cards/Inactive Cards - Grayscale/${jokerSuit} - inactive Cards/${jokerSuit}_Joker_grey.png`
+    }
   }
   
-  return `/assets/cards/Active Cards - Color/${suitFolder} - Active Cards/${suitFolder}_${rankStr}.png`
+  if (isActive) {
+    return `/assets/cards/Active Cards - Color/${suitFolder} - Active Cards/${suitFolder}_${rankStr}.png`
+  } else {
+    return `/assets/cards/Inactive Cards - Grayscale/${suitFolder} - inactive Cards/${suitFolder}_${rankStr}_grey.png`
+  }
 }
 
 // Map suit to card back file name
@@ -79,18 +97,23 @@ export function CardView({
   small = false,
   cardBackType = 'ai',
   cardBackSuit,
+  ownerSuit,
 }: CardViewProps) {
+  const isActive = isCardActive(card, ownerSuit)
+  
   const classes = [
     'card',
     small ? 'card-small' : '',
     faceDown ? 'card-back' : 'card-face',
     selected ? 'card-selected' : '',
     disabled ? 'card-disabled' : '',
+    !faceDown && isActive ? 'card-active' : '',
+    !faceDown && !isActive ? 'card-inactive' : '',
   ].filter(Boolean).join(' ')
 
   const imagePath = faceDown 
     ? getCardBackPath(cardBackType, cardBackSuit)
-    : getCardImagePath(card)
+    : getCardImagePath(card, ownerSuit)
 
   return (
     <div className={classes} onClick={!disabled ? onClick : undefined}>

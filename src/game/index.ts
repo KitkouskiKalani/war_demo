@@ -10,5 +10,6 @@ export type { GameAction } from './reducer';
 export { canEndTurn, canPlayCardToLane, gameReducer } from './reducer';
 export { executeAITurn, getAIMove } from './ai';
 export type { AIMove } from './ai';
+export { applySuitEffectsToLaneDamage, calculateLaneSuitEffects, getSuitEffectValue, isCardActive } from './suitEffects';
 
 

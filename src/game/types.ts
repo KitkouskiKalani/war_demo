@@ -49,6 +49,12 @@ export interface FlipResult {
   damage: number;
 }
 
+export interface PendingLaneResolution {
+  laneId: LaneId;
+  filledByPlayer: CurrentPlayer;
+  turnsUntilResolution: number; // Decrements each time it becomes the filling player's turn
+}
+
 export interface GameState {
   phase: GamePhase;
   player1: PlayerState;
@@ -65,6 +71,7 @@ export interface GameState {
   player2Suit: StandardSuit | null;
   flipResult: FlipResult | null;
   fieldControlSuit: StandardSuit | null;
+  pendingResolutionLanes: PendingLaneResolution[];
 }
 
 
