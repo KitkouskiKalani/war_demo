@@ -11,9 +11,8 @@
  * General principle: Play lowest cards first, save high cards for later
  */
 
-import type { Card, GameState, LaneId, Lane } from './types';
+import type { Card, GameState, LaneId } from './types';
 import { cardValue } from './deck';
-import { calculateLaneTotal } from './poker';
 import { canPlayCardToLane } from './reducer';
 
 export interface AIMove {
@@ -22,7 +21,6 @@ export interface AIMove {
   laneId?: LaneId;
 }
 
-const LANE_IDS: LaneId[] = ['left', 'middle', 'right'];
 const MAX_CARDS_PER_LANE = 3;
 
 /**
@@ -131,80 +129,6 @@ function findStrategicLanePlay(state: GameState, sortedHand: Card[]): AIMove | n
   }
 
   return null;
-}
-
-/**
- * Evaluate how good a lane play is (used for tie-breaking if needed).
- * Higher score = better play.
- */
-function evaluateLanePlay(state: GameState, card: Card, laneId: LaneId): number {
-  const lane = state.lanes.find(l => l.id === laneId)!;
-  const aiSide = lane.player2;
-  const playerSide = lane.player1;
-
-  let score = 0;
-
-  // Urgency: Player has 3 cards - must respond!
-  if (playerSide.cards.length === MAX_CARDS_PER_LANE) {
-    score += 1000; // Highest priority
-  }
-
-  // Completion bonus: About to fill the lane
-  if (aiSide.cards.length === 2) {
-    score += 100;
-  }
-
-  // Building bonus: Continue in existing lane
-  if (aiSide.cards.length === 1) {
-    score += 50;
-  }
-
-  // Prefer lower value cards (save high cards)
-  score -= cardValue(card) * 2;
-
-  // Evaluate potential poker bonus
-  const potentialCards = [...aiSide.cards, card];
-  const currentTotal = calculateLaneTotal(aiSide.cards);
-  const newTotal = calculateLaneTotal(potentialCards);
-  const bonusGained = newTotal - currentTotal - cardValue(card);
-  score += bonusGained * 3; // Weight bonus formation highly
-
-  // Consider opponent's strength
-  const opponentTotal = calculateLaneTotal(playerSide.cards);
-  
-  if (playerSide.cards.length > 0) {
-    if (newTotal > opponentTotal) {
-      score += 20; // Winning the lane
-    } else if (newTotal < opponentTotal && aiSide.cards.length === 2) {
-      score -= 10; // Completing a losing lane is bad
-    }
-  }
-
-  // Check for potential pairs/straights/flushes
-  if (aiSide.cards.length > 0) {
-    const existingRanks = aiSide.cards.map(c => c.rank);
-    // Pair bonus
-    if (existingRanks.includes(card.rank)) {
-      score += 15;
-    }
-    // Flush potential
-    const existingSuits = aiSide.cards.map(c => c.suit);
-    if (existingSuits.every(s => s === card.suit)) {
-      score += 12;
-    }
-    // Straight potential
-    const values = [...aiSide.cards.map(c => cardValue(c)), cardValue(card)].sort((a, b) => a - b);
-    if (values.length >= 2) {
-      const gaps = values.slice(1).map((v, i) => v - values[i]);
-      if (gaps.every(g => g === 1)) {
-        score += 15; // Consecutive cards
-      } else if (gaps.every(g => g <= 2)) {
-        score += 8; // Close to straight
-      }
-    }
-  }
-
-  return score;
 }
 
 /**

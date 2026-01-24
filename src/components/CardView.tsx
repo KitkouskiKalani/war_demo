@@ -3,7 +3,9 @@
  * Supports active (color) and inactive (grayscale) card art based on owner's chosen suit
  */
 
+import { useState, useRef, useEffect } from 'react'
 import type { Card, StandardSuit } from '../game/types'
+import { getCardEffectTooltip } from '../game/suitEffects'
 
 interface CardViewProps {
   card: Card
@@ -15,6 +17,14 @@ interface CardViewProps {
   cardBackType?: 'ai' | 'discard'  // ai = dynamic suit back, discard = Discard back
   cardBackSuit?: StandardSuit | null  // For dynamic card backs based on field control
   ownerSuit?: StandardSuit | null  // The suit chosen by the card's owner (for active/inactive art)
+  // Drag and drop props
+  draggable?: boolean
+  isDragging?: boolean
+  onDragStart?: () => void
+  onDragEnd?: () => void
+  onTouchStart?: (e: React.TouchEvent) => void
+  onTouchMove?: (e: React.TouchEvent) => void
+  onTouchEnd?: (e: React.TouchEvent) => void
 }
 
 // Map internal suit names to asset folder names
@@ -98,7 +108,19 @@ export function CardView({
   cardBackType = 'ai',
   cardBackSuit,
   ownerSuit,
+  draggable = false,
+  isDragging = false,
+  onDragStart,
+  onDragEnd,
+  onTouchStart,
+  onTouchMove,
+  onTouchEnd,
 }: CardViewProps) {
+  const [showTooltip, setShowTooltip] = useState(false)
+  const [tooltipPinned, setTooltipPinned] = useState(false)
+  const hoverTimeoutRef = useRef<number | null>(null)
+  const cardRef = useRef<HTMLDivElement>(null)
+  
   const isActive = isCardActive(card, ownerSuit)
   
   const classes = [
@@ -109,20 +131,128 @@ export function CardView({
     disabled ? 'card-disabled' : '',
     !faceDown && isActive ? 'card-active' : '',
     !faceDown && !isActive ? 'card-inactive' : '',
+    isDragging ? 'card-dragging' : '',
+    draggable && !disabled ? 'card-draggable' : '',
   ].filter(Boolean).join(' ')
 
   const imagePath = faceDown 
     ? getCardBackPath(cardBackType, cardBackSuit)
     : getCardImagePath(card, ownerSuit)
 
+  // Generate tooltip text for face-up cards with an owner suit
+  const tooltipText = !faceDown && ownerSuit 
+    ? getCardEffectTooltip(card, ownerSuit) 
+    : undefined
+
+  // Handle drag start event
+  const handleDragStart = (e: React.DragEvent) => {
+    if (!draggable || disabled) {
+      e.preventDefault()
+      return
+    }
+    // Hide tooltip when dragging starts
+    setShowTooltip(false)
+    setTooltipPinned(false)
+    // Set drag image (use the card itself)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', card.id)
+    onDragStart?.()
+  }
+
+  // Hover handlers for desktop tooltip
+  const handleMouseEnter = () => {
+    if (tooltipText && !isDragging) {
+      hoverTimeoutRef.current = window.setTimeout(() => {
+        setShowTooltip(true)
+      }, 400) // Show after 400ms hover
+    }
+  }
+
+  const handleMouseLeave = () => {
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current)
+      hoverTimeoutRef.current = null
+    }
+    // Only hide if not pinned
+    if (!tooltipPinned) {
+      setShowTooltip(false)
+    }
+  }
+
+  // Click/tap handler to toggle tooltip (mobile-friendly)
+  const handleClick = () => {
+    // If tooltip is pinned, unpin it
+    if (tooltipPinned) {
+      setTooltipPinned(false)
+      setShowTooltip(false)
+    } else if (tooltipText && !isDragging) {
+      // Pin the tooltip on click
+      setTooltipPinned(true)
+      setShowTooltip(true)
+    }
+    
+    // Still call the original onClick handler
+    if (!disabled && onClick) {
+      onClick()
+    }
+  }
+
+  // Close tooltip when clicking outside
+  useEffect(() => {
+    if (!tooltipPinned) return
+
+    const handleClickOutside = (e: Event) => {
+      if (cardRef.current && !cardRef.current.contains(e.target as Node)) {
+        setTooltipPinned(false)
+        setShowTooltip(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('touchstart', handleClickOutside)
+    
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('touchstart', handleClickOutside)
+    }
+  }, [tooltipPinned])
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (hoverTimeoutRef.current) {
+        clearTimeout(hoverTimeoutRef.current)
+      }
+    }
+  }, [])
+
   return (
-    <div className={classes} onClick={!disabled ? onClick : undefined}>
+    <div 
+      ref={cardRef}
+      className={classes} 
+      onClick={handleClick}
+      draggable={draggable && !disabled}
+      onDragStart={handleDragStart}
+      onDragEnd={onDragEnd}
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
       <img 
         src={imagePath} 
         alt={faceDown ? 'Card back' : `${card.rank} of ${card.suit}`}
         className="card-image"
         draggable={false}
       />
+      
+      {/* Custom tooltip */}
+      {showTooltip && tooltipText && (
+        <div className={`card-tooltip ${isActive ? 'active' : 'inactive'}`}>
+          {tooltipText}
+        </div>
+      )}
     </div>
   )
 }

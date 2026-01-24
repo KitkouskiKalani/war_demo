@@ -22,10 +22,10 @@ const EFFECT_VALUES = {
 }
 
 // Damage suits add bonus damage
-const DAMAGE_SUITS: StandardSuit[] = ['diamonds', 'spades']
+export const DAMAGE_SUITS: StandardSuit[] = ['diamonds', 'spades']
 
 // Healing suits reduce damage or heal
-const HEALING_SUITS: StandardSuit[] = ['hearts', 'clubs']
+export const HEALING_SUITS: StandardSuit[] = ['hearts', 'clubs']
 
 /**
  * Get the effect tier for a card based on its rank
@@ -102,29 +102,46 @@ export function calculateLaneSuitEffects(
 }
 
 /**
- * Apply suit effects to lane resolution damage
+ * Apply winner's suit effects to lane resolution
+ * 
+ * IMPORTANT: Only the WINNER's active cards provide effects!
+ * - Damage suits (Diamonds/Spades): Add bonus damage to loser
+ * - Healing suits (Hearts/Clubs): Winner heals themselves (applied separately)
  * 
  * @param baseDamage - The base damage from lane total difference
- * @param winnerDamageBonus - Winner's bonus damage from active cards
- * @param loserHealing - Loser's healing from active cards
- * @returns Final damage to apply (can be negative = healing if fully mitigated)
+ * @param winnerDamageBonus - Winner's bonus damage from active cards (if damage suit)
+ * @returns Final damage to apply to the loser
  */
-export function applySuitEffectsToLaneDamage(
+export function applyWinnerDamageBonus(
   baseDamage: number,
-  winnerDamageBonus: number,
-  loserHealing: number
-): { finalDamage: number; healingOverflow: number } {
-  // Add winner's damage bonus
-  const totalDamage = baseDamage + winnerDamageBonus
-  
-  // Subtract loser's healing
-  const afterHealing = totalDamage - loserHealing
-  
-  if (afterHealing < 0) {
-    // Fully mitigated + overflow = healing for the loser
-    return { finalDamage: 0, healingOverflow: Math.abs(afterHealing) }
+  winnerDamageBonus: number
+): number {
+  return baseDamage + winnerDamageBonus
+}
+
+/**
+ * Get tooltip text for a card's suit effect
+ * Shows the bonus damage/healing if active, or "No effect" if inactive
+ */
+export function getCardEffectTooltip(
+  card: Card,
+  ownerSuit: StandardSuit | null
+): string {
+  if (!isCardActive(card, ownerSuit)) {
+    return 'No effect'
   }
   
-  return { finalDamage: afterHealing, healingOverflow: 0 }
+  const tier = getEffectTier(card)
+  const effectValue = EFFECT_VALUES[tier]
+  
+  if (ownerSuit && DAMAGE_SUITS.includes(ownerSuit)) {
+    return `+${effectValue} bonus damage (if lane won)`
+  }
+  
+  if (ownerSuit && HEALING_SUITS.includes(ownerSuit)) {
+    return `+${effectValue} healing (if lane won)`
+  }
+  
+  return 'No effect'
 }
 

@@ -20,7 +20,8 @@ export function createEmptyLanes(): Lane[] {
 export function initializeNewGame(): GameState {
   const deck = shuffle(createDeck());
   return {
-    phase: 'SuitSelection',
+    phase: 'ModeSelection',
+    gameMode: 'vs-ai', // Default, will be set by player
     player1: { hp: STARTING_HP, deck: deck.slice(0, CARDS_PER_PLAYER), hand: [] },
     player2: { hp: STARTING_HP, deck: deck.slice(CARDS_PER_PLAYER, CARDS_PER_PLAYER * 2), hand: [] },
     lanes: createEmptyLanes(),
@@ -36,6 +37,15 @@ export function initializeNewGame(): GameState {
     flipResult: null,
     fieldControlSuit: null,
     pendingResolutionLanes: [],
+    // Support ability tracking
+    player1LanesLost: 0,
+    player2LanesLost: 0,
+    player1SupportAvailable: false,
+    player2SupportAvailable: false,
+    // Online multiplayer
+    localPlayer: null,
+    isHost: false,
+    roomCode: null,
   };
 }
 
@@ -44,6 +54,7 @@ export function startNewRound(prevState: GameState): GameState {
   const shuffledDeck = shuffle(allCards);
   return {
     phase: 'InitialFlip',
+    gameMode: prevState.gameMode, // Preserve game mode across rounds
     player1: { hp: prevState.player1.hp, deck: shuffledDeck.slice(0, CARDS_PER_PLAYER), hand: [] },
     player2: { hp: prevState.player2.hp, deck: shuffledDeck.slice(CARDS_PER_PLAYER, CARDS_PER_PLAYER * 2), hand: [] },
     lanes: createEmptyLanes(),
@@ -59,6 +70,15 @@ export function startNewRound(prevState: GameState): GameState {
     flipResult: null,
     fieldControlSuit: null, // Reset for new flip
     pendingResolutionLanes: [],
+    // Support ability persists across rounds
+    player1LanesLost: prevState.player1LanesLost,
+    player2LanesLost: prevState.player2LanesLost,
+    player1SupportAvailable: prevState.player1SupportAvailable,
+    player2SupportAvailable: prevState.player2SupportAvailable,
+    // Online multiplayer - preserve across rounds
+    localPlayer: prevState.localPlayer,
+    isHost: prevState.isHost,
+    roomCode: prevState.roomCode,
   };
 }
 

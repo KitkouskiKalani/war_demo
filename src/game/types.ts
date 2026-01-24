@@ -7,6 +7,8 @@ export type Rank = 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 'J' | 'Q' | 'K' | 'A' | 
 export type StandardRank = 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 'J' | 'Q' | 'K' | 'A';
 export type StandardSuit = 'hearts' | 'diamonds' | 'clubs' | 'spades';
 
+export type GameMode = 'vs-ai' | 'vs-player' | 'online';
+
 export interface Card {
   id: string;
   suit: Suit;
@@ -34,7 +36,14 @@ export interface PlayerState {
 export type CurrentPlayer = 1 | 2;
 
 export type GamePhase = 
+  | 'ModeSelection'
+  | 'OnlineLobby'      // Choose to create or join a room
+  | 'WaitingForPlayer' // Host waiting for guest to connect
+  | 'JoiningRoom'      // Guest entering room code
   | 'SuitSelection'
+  | 'SuitSelectionP2'  // For PvP: Player 2 picks their suit
+  | 'WaitingForOpponentSuit' // Online: waiting for opponent to pick suit
+  | 'PassDevice'       // Transition screen between turns in PvP hotseat
   | 'InitialFlip' 
   | 'InitialFlipResult'
   | 'Main' 
@@ -57,6 +66,7 @@ export interface PendingLaneResolution {
 
 export interface GameState {
   phase: GamePhase;
+  gameMode: GameMode;
   player1: PlayerState;
   player2: PlayerState;
   lanes: Lane[];
@@ -72,6 +82,15 @@ export interface GameState {
   flipResult: FlipResult | null;
   fieldControlSuit: StandardSuit | null;
   pendingResolutionLanes: PendingLaneResolution[];
+  // Support ability tracking
+  player1LanesLost: number;
+  player2LanesLost: number;
+  player1SupportAvailable: boolean;
+  player2SupportAvailable: boolean;
+  // Online multiplayer
+  localPlayer: CurrentPlayer | null; // Which player you are (1 = host, 2 = guest)
+  isHost: boolean;
+  roomCode: string | null;
 }
 
 

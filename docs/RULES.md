@@ -1,4 +1,4 @@
-# War-Lanes Poker – Game Rules v1.3
+# War-Lanes Poker – Game Rules v1.4
 
 ## Overview
 
@@ -322,16 +322,15 @@ At the start of the game, each player chooses a suit. Cards of their chosen suit
 
 ### Suit Effect Types
 
-Each suit provides a unique effect when active cards are played in lanes:
+**IMPORTANT:** Suit effects only activate if the player **wins** the lane. If you lose a lane, your active cards provide no benefit.
 
 **Damage Suits (Diamonds, Spades)**
-- Active cards add bonus damage when their lane resolves
-- The bonus is added to the total damage dealt to the opponent
+- When you WIN a lane, your active cards add bonus damage to the opponent
+- The bonus is applied AFTER the lane winner is determined (not part of the lane total comparison)
 
 **Healing Suits (Hearts, Clubs)**
-- Active cards provide healing when their lane resolves
-- First, healing reduces incoming damage
-- Any remaining healing after damage mitigation restores HP
+- When you WIN a lane, your active cards heal YOU
+- Healing is applied AFTER lane resolution (not damage mitigation)
 
 ### Effect Values by Card Rank
 
@@ -346,18 +345,61 @@ Each suit provides a unique effect when active cards are played in lanes:
 When a lane resolves:
 
 1. Calculate base lane totals (card values + poker bonuses)
-2. Determine the winner (higher total)
+2. Determine the winner (higher total wins)
 3. Calculate base damage (winner total - loser total)
-4. Add winner's damage bonus (if any active Diamonds/Spades cards)
-5. Subtract loser's healing (if any active Hearts/Clubs cards)
-6. Apply final damage (minimum 0)
-7. If healing exceeds damage, overflow restores loser's HP
+4. **Only the WINNER's active cards activate:**
+   - If winner has Diamonds/Spades: Add bonus damage to loser
+   - If winner has Hearts/Clubs: Winner heals themselves
+5. Loser's active cards provide NO benefit (they lost)
 
-**Example:**
-- Player (Diamonds) has 3 active cards with +7, +5, +3 bonus = +15 damage
-- AI (Hearts) has 2 active cards with +5, +3 bonus = +8 healing
-- Base damage to AI: 10
-- With bonuses: 10 + 15 - 8 = 17 final damage to AI
+**Example 1 - Winner has damage suit:**
+- Player (Diamonds) wins with total 35 vs AI's 25
+- Player has 3 active Diamond cards with +7, +5, +3 = +15 damage bonus
+- Base damage: 35 - 25 = 10
+- Final damage to AI: 10 + 15 = 25
+
+**Example 2 - Winner has healing suit:**
+- Player (Hearts) wins with total 30 vs AI's 20
+- Player has 2 active Heart cards with +5, +3 = +8 healing
+- Base damage to AI: 30 - 20 = 10 (no bonus added)
+- Player heals: +8 HP
+
+**Example 3 - Loser's cards don't activate:**
+- AI wins the lane (AI total > Player total)
+- Player (Diamonds) has 3 active cards, but they DON'T add damage
+- Only the AI's active cards (if any) would provide effects
+
+---
+
+## Support Ability (v1.4)
+
+Each player has a Support character that can be activated after losing lanes.
+
+### Unlocking the Support Ability
+
+- The support ability becomes available after a player **loses 2 lanes**.
+- A lane loss counts when the player has cards in the lane and the opponent wins.
+- Once unlocked, the support icon **glows** to indicate it's ready to use.
+- The ability can be used **once** per unlock (must lose 2 more lanes to unlock again).
+
+### Using the Ability
+
+**Player:**
+- Click the glowing support icon during your turn to activate the ability.
+
+**AI:**
+- When the AI's support ability is ready, the icon glows for ~1.5 seconds before the AI uses it automatically at the start of their turn.
+
+### Ability Effects (Based on Suit)
+
+| Suit | Effect |
+|------|--------|
+| Diamonds | Deal 5 damage to opponent |
+| Spades | Deal 5 damage to opponent |
+| Hearts | Heal self for 5 HP |
+| Clubs | Heal self for 5 HP |
+
+**Note:** Health can exceed the starting 100 HP cap when using healing abilities.
 
 ---
 
