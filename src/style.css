@@ -451,8 +451,8 @@ body {
    ======================================== */
 
 .card {
-  width: 52px;
-  height: 73px;
+  width: 58px;
+  height: 81px;
   border-radius: 5px;
   display: flex;
   align-items: center;
@@ -706,8 +706,8 @@ body {
 
 /* Lane cards - larger to fill lane width */
 .card-small {
-  width: 48px;
-  height: 67px;
+  width: 54px;
+  height: 75px;
 }
 
 @media (min-width: 640px) {
@@ -880,9 +880,9 @@ body {
   flex-direction: column;
   gap: 0;
   transition: all 0.3s ease;
-  width: 58px;
+  width: 66px;
   flex-shrink: 0;
-  height: 220px;
+  height: 280px;
   justify-content: center;
   position: relative;
 }
@@ -1010,7 +1010,7 @@ body {
 }
 
 .lane-cards-stack .stacked-card:not(:first-child) {
-  margin-top: -42px;
+  margin-top: -50px;
 }
 
 @media (min-width: 640px) {
@@ -1275,8 +1275,8 @@ body {
 
 .board-area {
   position: relative;
-  padding: 6px 4px;
-  min-height: 260px;
+  padding: 8px 4px;
+  min-height: 320px;
   display: flex;
   align-items: center;
   justify-content: center;
