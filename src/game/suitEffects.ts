@@ -120,7 +120,7 @@ export function applyWinnerDamageBonus(
 }
 
 /**
- * Get tooltip text for a card's suit effect
+ * Get tooltip text for a card's suit effect (legacy - simple string)
  * Shows the bonus damage/healing if active, or "No effect" if inactive
  */
 export function getCardEffectTooltip(
@@ -145,3 +145,89 @@ export function getCardEffectTooltip(
   return 'No effect'
 }
 
+/**
+ * Get structured tooltip data for a card
+ * Returns header (card name), base damage, and effect text (for active cards)
+ */
+export interface CardTooltipData {
+  header: string;       // e.g., "5 of Clubs"
+  baseDamage: string;   // e.g., "Deals 5 damage"
+  effect: string | null; // e.g., "Effect: +7 bonus damage" or null if inactive
+  description?: string; // Optional extra description (for Jokers)
+}
+
+export function getRankDisplayName(rank: number | string): string {
+  if (rank === 'JOKER') return 'Joker'
+  if (rank === 'J') return 'Jack'
+  if (rank === 'Q') return 'Queen'
+  if (rank === 'K') return 'King'
+  if (rank === 'A') return 'Ace'
+  return String(rank)
+}
+
+export function getSuitDisplayName(suit: string): string {
+  return suit.charAt(0).toUpperCase() + suit.slice(1)
+}
+
+/**
+ * Joker tooltip data for when in hand (not yet played)
+ */
+export function getJokerInHandTooltip(): CardTooltipData {
+  return {
+    header: 'Joker',
+    baseDamage: 'Deals up to 15 damage',
+    effect: null,
+    description: 'Becomes the best card wherever played. Value capped by cards played on top.'
+  }
+}
+
+/**
+ * Joker tooltip data for when on the board (resolved)
+ */
+export function getJokerOnBoardTooltip(
+  mimicRank: string,
+  mimicSuit: string,
+  mimicValue: number
+): CardTooltipData {
+  const rankName = getRankDisplayName(mimicRank)
+  const suitName = getSuitDisplayName(mimicSuit)
+  
+  return {
+    header: 'Joker',
+    baseDamage: `Deals ${mimicValue} damage`,
+    effect: null, // Jokers never get suit effects
+    description: `Mimicking ${rankName} of ${suitName}`
+  }
+}
+
+export function getCardTooltipData(
+  card: Card,
+  ownerSuit: StandardSuit | null
+): CardTooltipData {
+  // Jokers in hand get special tooltip
+  if (card.rank === 'JOKER') {
+    return getJokerInHandTooltip()
+  }
+  
+  const rankName = getRankDisplayName(card.rank)
+  const suitName = getSuitDisplayName(card.suit)
+  const value = cardValue(card)
+  const isActive = isCardActive(card, ownerSuit)
+  
+  const header = `${rankName} of ${suitName}`
+  const baseDamage = `Deals ${value} damage`
+  
+  let effect: string | null = null
+  if (isActive) {
+    const tier = getEffectTier(card)
+    const effectValue = EFFECT_VALUES[tier]
+    
+    if (ownerSuit && DAMAGE_SUITS.includes(ownerSuit)) {
+      effect = `Effect: +${effectValue} bonus damage`
+    } else if (ownerSuit && HEALING_SUITS.includes(ownerSuit)) {
+      effect = `Effect: +${effectValue} healing`
+    }
+  }
+  
+  return { header, baseDamage, effect }
+}

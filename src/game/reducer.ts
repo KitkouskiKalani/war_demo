@@ -554,19 +554,31 @@ function resolveLane(state: GameState, laneId: LaneId): GameState {
   let player2LanesLost = state.player2LanesLost;
   let player1SupportAvailable = state.player1SupportAvailable;
   let player2SupportAvailable = state.player2SupportAvailable;
+  
+  // Track resolution result for animation
+  let winner: CurrentPlayer | null = null;
+  let loser: CurrentPlayer | null = null;
+  let finalDamage = 0;
+  let baseDamage = 0;
+  let bonusDamage = 0;
+  let bonusHealing = 0;
 
   if (p1Total > p2Total) {
     // Player 1 WINS this lane - Player 2 loses
+    winner = 1;
+    loser = 2;
     const p1Effects = calculateLaneSuitEffects(lane.player1.cards, state.player1Suit);
-    const baseDamage = p1Total - p2Total;
+    baseDamage = p1Total - p2Total;
+    bonusDamage = p1Effects.totalDamage;
+    bonusHealing = p1Effects.totalHealing;
     
     // Damage suits: Add bonus damage to loser
-    const finalDamage = applyWinnerDamageBonus(baseDamage, p1Effects.totalDamage);
+    finalDamage = applyWinnerDamageBonus(baseDamage, bonusDamage);
     player2 = applyDamage(player2, finalDamage);
     
     // Healing suits: Winner heals themselves (applied after resolution)
-    if (p1Effects.totalHealing > 0) {
-      player1 = { ...player1, hp: player1.hp + p1Effects.totalHealing };
+    if (bonusHealing > 0) {
+      player1 = { ...player1, hp: player1.hp + bonusHealing };
     }
     
     // Track lane loss for Player 2 (AI) - only if they actually had cards in the lane
@@ -579,16 +591,20 @@ function resolveLane(state: GameState, laneId: LaneId): GameState {
     }
   } else if (p2Total > p1Total) {
     // Player 2 WINS this lane - Player 1 loses
+    winner = 2;
+    loser = 1;
     const p2Effects = calculateLaneSuitEffects(lane.player2.cards, state.player2Suit);
-    const baseDamage = p2Total - p1Total;
+    baseDamage = p2Total - p1Total;
+    bonusDamage = p2Effects.totalDamage;
+    bonusHealing = p2Effects.totalHealing;
     
     // Damage suits: Add bonus damage to loser
-    const finalDamage = applyWinnerDamageBonus(baseDamage, p2Effects.totalDamage);
+    finalDamage = applyWinnerDamageBonus(baseDamage, bonusDamage);
     player1 = applyDamage(player1, finalDamage);
     
     // Healing suits: Winner heals themselves (applied after resolution)
-    if (p2Effects.totalHealing > 0) {
-      player2 = { ...player2, hp: player2.hp + p2Effects.totalHealing };
+    if (bonusHealing > 0) {
+      player2 = { ...player2, hp: player2.hp + bonusHealing };
     }
     
     // Track lane loss for Player 1 - only if they actually had cards in the lane
@@ -605,6 +621,20 @@ function resolveLane(state: GameState, laneId: LaneId): GameState {
   const laneCards = [...lane.player1.cards, ...lane.player2.cards];
   const clearedLane: Lane = { ...lane, player1: { cards: [] }, player2: { cards: [] } };
 
+  // Create resolution result for animation
+  const lastLaneResolution = {
+    laneId,
+    player1Total: p1Total,
+    player2Total: p2Total,
+    winner,
+    loser,
+    damage: finalDamage,
+    baseDamage,
+    bonusDamage,
+    bonusHealing,
+    timestamp: Date.now(),
+  };
+
   return { 
     ...state, 
     player1, 
@@ -615,6 +645,7 @@ function resolveLane(state: GameState, laneId: LaneId): GameState {
     player2LanesLost,
     player1SupportAvailable,
     player2SupportAvailable,
+    lastLaneResolution,
   };
 }
 

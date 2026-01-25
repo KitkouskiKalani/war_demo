@@ -46,6 +46,8 @@ export function initializeNewGame(): GameState {
     localPlayer: null,
     isHost: false,
     roomCode: null,
+    // Lane resolution animation
+    lastLaneResolution: null,
   };
 }
 
@@ -79,6 +81,8 @@ export function startNewRound(prevState: GameState): GameState {
     localPlayer: prevState.localPlayer,
     isHost: prevState.isHost,
     roomCode: prevState.roomCode,
+    // Lane resolution animation - clear for new round
+    lastLaneResolution: null,
   };
 }
 

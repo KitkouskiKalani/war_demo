@@ -5,7 +5,8 @@
 
 import { useState, useRef, useEffect } from 'react'
 import type { Card, StandardSuit } from '../game/types'
-import { getCardEffectTooltip } from '../game/suitEffects'
+import { getCardTooltipData, getJokerOnBoardTooltip } from '../game/suitEffects'
+import { getJokerMimicInfo } from '../game/poker'
 
 interface CardViewProps {
   card: Card
@@ -17,10 +18,13 @@ interface CardViewProps {
   cardBackType?: 'ai' | 'discard'  // ai = dynamic suit back, discard = Discard back
   cardBackSuit?: StandardSuit | null  // For dynamic card backs based on field control
   ownerSuit?: StandardSuit | null  // The suit chosen by the card's owner (for active/inactive art)
+  // Lane context for Joker tooltips (when card is on board)
+  laneCards?: Card[]  // All cards in the lane (for resolving Joker)
+  cardIndexInLane?: number  // This card's index in the lane
   // Drag and drop props
   draggable?: boolean
   isDragging?: boolean
-  onDragStart?: () => void
+  onDragStart?: (e: React.DragEvent) => void
   onDragEnd?: () => void
   onTouchStart?: (e: React.TouchEvent) => void
   onTouchMove?: (e: React.TouchEvent) => void
@@ -108,6 +112,8 @@ export function CardView({
   cardBackType = 'ai',
   cardBackSuit,
   ownerSuit,
+  laneCards,
+  cardIndexInLane,
   draggable = false,
   isDragging = false,
   onDragStart,
@@ -139,10 +145,22 @@ export function CardView({
     ? getCardBackPath(cardBackType, cardBackSuit)
     : getCardImagePath(card, ownerSuit)
 
-  // Generate tooltip text for face-up cards with an owner suit
-  const tooltipText = !faceDown && ownerSuit 
-    ? getCardEffectTooltip(card, ownerSuit) 
-    : undefined
+  // Generate structured tooltip data for face-up cards with an owner suit
+  // For Jokers on the board, show what they're mimicking
+  const tooltipData = (() => {
+    if (faceDown || !ownerSuit) return null
+    
+    // Check if this is a Joker on the board (has lane context)
+    if (card.rank === 'JOKER' && laneCards && cardIndexInLane !== undefined) {
+      const mimicInfo = getJokerMimicInfo(laneCards, cardIndexInLane)
+      if (mimicInfo) {
+        return getJokerOnBoardTooltip(mimicInfo.rank, mimicInfo.suit, mimicInfo.value)
+      }
+    }
+    
+    // Regular card or Joker in hand
+    return getCardTooltipData(card, ownerSuit)
+  })()
 
   // Handle drag start event
   const handleDragStart = (e: React.DragEvent) => {
@@ -153,18 +171,25 @@ export function CardView({
     // Hide tooltip when dragging starts
     setShowTooltip(false)
     setTooltipPinned(false)
-    // Set drag image (use the card itself)
+    // Set drag data
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData('text/plain', card.id)
-    onDragStart?.()
+    // Hide the browser's default drag image - we'll use our custom ghost instead
+    const emptyImg = new Image()
+    emptyImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+    e.dataTransfer.setDragImage(emptyImg, 0, 0)
+    onDragStart?.(e)
   }
 
-  // Hover handlers for desktop tooltip
+  // Hover handlers for desktop tooltip - instant show on hover
   const handleMouseEnter = () => {
-    if (tooltipText && !isDragging) {
-      hoverTimeoutRef.current = window.setTimeout(() => {
-        setShowTooltip(true)
-      }, 400) // Show after 400ms hover
+    if (tooltipData && !isDragging && !faceDown) {
+      // Clear any pending hide
+      if (hoverTimeoutRef.current) {
+        clearTimeout(hoverTimeoutRef.current)
+        hoverTimeoutRef.current = null
+      }
+      setShowTooltip(true)
     }
   }
 
@@ -173,25 +198,28 @@ export function CardView({
       clearTimeout(hoverTimeoutRef.current)
       hoverTimeoutRef.current = null
     }
-    // Only hide if not pinned
+    // Hide after a brief delay (allows moving to tooltip if needed)
     if (!tooltipPinned) {
-      setShowTooltip(false)
+      hoverTimeoutRef.current = window.setTimeout(() => {
+        setShowTooltip(false)
+      }, 100)
     }
   }
 
-  // Click/tap handler to toggle tooltip (mobile-friendly)
+  // Click/tap handler to toggle tooltip (mobile-friendly) and select card
   const handleClick = () => {
-    // If tooltip is pinned, unpin it
-    if (tooltipPinned) {
-      setTooltipPinned(false)
-      setShowTooltip(false)
-    } else if (tooltipText && !isDragging) {
-      // Pin the tooltip on click
-      setTooltipPinned(true)
-      setShowTooltip(true)
+    // For mobile: toggle tooltip pin on tap
+    if (tooltipData && !isDragging && !faceDown) {
+      if (tooltipPinned) {
+        setTooltipPinned(false)
+        setShowTooltip(false)
+      } else {
+        setTooltipPinned(true)
+        setShowTooltip(true)
+      }
     }
     
-    // Still call the original onClick handler
+    // Still call the original onClick handler for card selection
     if (!disabled && onClick) {
       onClick()
     }
@@ -247,10 +275,17 @@ export function CardView({
         draggable={false}
       />
       
-      {/* Custom tooltip */}
-      {showTooltip && tooltipText && (
-        <div className={`card-tooltip ${isActive ? 'active' : 'inactive'}`}>
-          {tooltipText}
+      {/* Custom tooltip with structured content */}
+      {showTooltip && tooltipData && (
+        <div className={`card-tooltip ${card.rank === 'JOKER' ? 'joker' : isActive ? 'active' : 'inactive'}`}>
+          <div className="tooltip-header">{tooltipData.header}</div>
+          <div className="tooltip-damage">{tooltipData.baseDamage}</div>
+          {tooltipData.description && (
+            <div className="tooltip-description">{tooltipData.description}</div>
+          )}
+          {tooltipData.effect && (
+            <div className="tooltip-effect">{tooltipData.effect}</div>
+          )}
         </div>
       )}
     </div>

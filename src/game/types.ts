@@ -64,6 +64,21 @@ export interface PendingLaneResolution {
   turnsUntilResolution: number; // Decrements each time it becomes the filling player's turn
 }
 
+// Result of a lane resolution - used for animation
+export interface LaneResolutionResult {
+  laneId: LaneId;
+  player1Total: number;
+  player2Total: number;
+  winner: CurrentPlayer | null; // null = tie
+  damage: number;
+  baseDamage: number;  // Damage before suit effects
+  loser: CurrentPlayer | null;
+  timestamp: number; // Used to detect new resolutions
+  // Suit effect bonuses (from winner's active cards)
+  bonusDamage: number;  // Extra damage dealt (diamonds/spades)
+  bonusHealing: number; // Healing to winner (hearts/clubs)
+}
+
 export interface GameState {
   phase: GamePhase;
   gameMode: GameMode;
@@ -91,6 +106,8 @@ export interface GameState {
   localPlayer: CurrentPlayer | null; // Which player you are (1 = host, 2 = guest)
   isHost: boolean;
   roomCode: string | null;
+  // Lane resolution animation
+  lastLaneResolution: LaneResolutionResult | null;
 }
 
 

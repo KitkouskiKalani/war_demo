@@ -462,7 +462,7 @@ body {
   position: relative;
   box-shadow: 0 2px 6px rgba(0,0,0,0.4);
   flex-shrink: 0;
-  overflow: hidden;
+  overflow: visible; /* Changed from hidden to allow tooltips to show above card */
   background: transparent;
   border: none;
 }
@@ -536,15 +536,40 @@ body {
   bottom: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%);
-  padding: 8px 12px;
+  padding: 10px 14px;
   border-radius: 8px;
   font-size: 12px;
-  font-weight: 600;
   white-space: nowrap;
   z-index: 100;
   pointer-events: none;
   animation: tooltip-appear 0.2s ease-out;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  text-align: center;
+}
+
+.tooltip-header {
+  font-weight: 700;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.tooltip-damage {
+  font-weight: 500;
+  font-size: 11px;
+  opacity: 0.9;
+}
+
+.tooltip-effect {
+  font-weight: 600;
+  font-size: 11px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.card-tooltip.active .tooltip-effect {
+  color: #4ade80;
+  text-shadow: 0 0 6px rgba(74, 222, 128, 0.5);
 }
 
 @keyframes tooltip-appear {
@@ -571,6 +596,32 @@ body {
   background: linear-gradient(135deg, #1a1a2e 0%, #2d2d4a 100%);
   border: 2px solid #6b7280;
   color: #9ca3af;
+}
+
+/* Joker tooltip - special purple/rainbow styling */
+.card-tooltip.joker {
+  background: linear-gradient(135deg, #2d1f3d 0%, #4a2c6a 100%);
+  border: 2px solid #c084fc;
+  color: #e9d5ff;
+  text-shadow: 0 0 8px rgba(192, 132, 252, 0.5);
+}
+
+.card-tooltip.joker::after {
+  border-top-color: #c084fc;
+}
+
+/* Tooltip description (for Jokers) */
+.tooltip-description {
+  font-size: 10px;
+  font-weight: 400;
+  font-style: italic;
+  opacity: 0.85;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  white-space: normal;
+  max-width: 180px;
+  line-height: 1.3;
 }
 
 /* Arrow pointing down to card */
@@ -693,6 +744,23 @@ body {
   box-shadow: 0 0 15px rgba(239, 68, 68, 0.5);
 }
 
+/* Taking damage flash animation */
+.avatar-frame.taking-damage {
+  animation: damage-flash 0.4s ease-in-out 5;
+}
+
+@keyframes damage-flash {
+  0%, 100% {
+    filter: brightness(1) saturate(1);
+    transform: scale(1);
+  }
+  50% {
+    filter: brightness(1.8) saturate(0) sepia(1) hue-rotate(-50deg);
+    box-shadow: 0 0 40px rgba(239, 68, 68, 1), inset 0 0 20px rgba(239, 68, 68, 0.5);
+    transform: scale(1.05);
+  }
+}
+
 .support-icon {
   width: 48px;
   height: 48px;
@@ -812,7 +880,7 @@ body {
   transition: all 0.3s ease;
   width: 72px;
   flex-shrink: 0;
-  height: 260px;
+  height: 310px;
   justify-content: space-between;
   position: relative;
 }
@@ -821,7 +889,7 @@ body {
   .lane {
     padding: 6px;
     width: 88px;
-    height: 300px;
+    height: 360px;
   }
 }
 
@@ -866,17 +934,17 @@ body {
   }
 }
 
-/* Pending resolution indicator */
+/* Pending resolution indicator - positioned above lanes and lane totals */
 .lane-pending-indicator {
   position: absolute;
-  top: -44px;
+  top: -52px;
   left: 50%;
   transform: translateX(-50%);
   background: rgba(234, 179, 8, 0.95);
   color: #000;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
-  padding: 3px 8px;
+  padding: 2px 6px;
   border-radius: 4px;
   white-space: nowrap;
   z-index: 10;
@@ -920,7 +988,7 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  height: 110px;
+  height: 135px;
   position: relative;
 }
 
@@ -937,15 +1005,15 @@ body {
 }
 
 .lane-cards-stack .stacked-card:not(:first-child) {
-  margin-top: -55px;
+  margin-top: -50px;
 }
 
 @media (min-width: 640px) {
   .lane-cards-stack {
-    height: 130px;
+    height: 160px;
   }
   .lane-cards-stack .stacked-card:not(:first-child) {
-    margin-top: -65px;
+    margin-top: -58px;
   }
 }
 
@@ -995,6 +1063,33 @@ body {
   z-index: 5;
 }
 
+/* Deck glow effects for low hands remaining */
+.deck-glow-warning {
+  animation: deck-pulse-warning 1.5s ease-in-out infinite;
+}
+
+.deck-glow-danger {
+  animation: deck-pulse-danger 1s ease-in-out infinite;
+}
+
+@keyframes deck-pulse-warning {
+  0%, 100% {
+    filter: drop-shadow(0 0 4px rgba(234, 179, 8, 0.6));
+  }
+  50% {
+    filter: drop-shadow(0 0 12px rgba(234, 179, 8, 0.9));
+  }
+}
+
+@keyframes deck-pulse-danger {
+  0%, 100% {
+    filter: drop-shadow(0 0 4px rgba(239, 68, 68, 0.7));
+  }
+  50% {
+    filter: drop-shadow(0 0 14px rgba(239, 68, 68, 1));
+  }
+}
+
 /* ========================================
    DISCARD PILE & END TURN - Right side
    ======================================== */
@@ -1020,6 +1115,7 @@ body {
   flex-shrink: 0;
   position: relative;
   overflow: hidden;
+  margin-bottom: 12px; /* Add spacing between discard and end turn button */
 }
 
 .discard-image {
@@ -1055,23 +1151,25 @@ body {
 }
 
 .end-turn-btn {
-  padding: 6px 8px;
-  font-size: 8px;
+  padding: 10px 14px;
+  font-size: 11px;
   font-weight: bold;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  border-radius: 6px;
+  border-radius: 8px;
   border: none;
   cursor: pointer;
   transition: all 0.2s ease;
   white-space: nowrap;
-  line-height: 1.2;
+  line-height: 1.3;
+  min-width: 50px;
 }
 
 @media (min-width: 640px) {
   .end-turn-btn {
-    padding: 8px 10px;
-    font-size: 10px;
+    padding: 12px 16px;
+    font-size: 12px;
+    min-width: 60px;
   }
 }
 
@@ -1275,6 +1373,68 @@ body {
 @media (min-width: 640px) {
   .lanes-container {
     gap: 6px;
+  }
+}
+
+/* Lane wrapper - contains lane + totals */
+.lane-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Lane total displays - outside the lane */
+.lane-total {
+  font-size: 14px;
+  font-weight: 700;
+  min-width: 30px;
+  text-align: center;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #6b7280;
+}
+
+.lane-total.has-value {
+  color: #e2e8f0;
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.lane-total.opponent.has-value {
+  color: #f87171;
+  text-shadow: 0 0 6px rgba(248, 113, 113, 0.5);
+}
+
+.lane-total.player.has-value {
+  color: #4ade80;
+  text-shadow: 0 0 6px rgba(74, 222, 128, 0.5);
+}
+
+/* Lane total breakdown: base sum | bonus */
+.lane-total .base-sum {
+  /* Inherits color from parent */
+}
+
+.lane-total .bonus-separator {
+  margin: 0 3px;
+  opacity: 0.5;
+}
+
+.lane-total .bonus-value {
+  color: #fbbf24;
+  text-shadow: 0 0 6px rgba(251, 191, 36, 0.6);
+}
+
+@media (min-width: 640px) {
+  .lane-total {
+    font-size: 16px;
+    padding: 3px 8px;
+    min-width: 36px;
+  }
+  
+  .lane-total .bonus-separator {
+    margin: 0 4px;
   }
 }
 
@@ -1735,6 +1895,234 @@ body {
   20% { opacity: 1; }
   80% { opacity: 1; }
   100% { opacity: 0; }
+}
+
+/* ========================================
+   LANE RESOLUTION ANIMATION
+   ======================================== */
+
+.resolution-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.85);
+  z-index: 200;
+  animation: resolution-appear 2.5s ease-out forwards;
+}
+
+@keyframes resolution-appear {
+  0% { opacity: 0; }
+  10% { opacity: 1; }
+  85% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.resolution-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  animation: resolution-scale 0.4s ease-out;
+}
+
+@keyframes resolution-scale {
+  from {
+    transform: scale(0.8);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.resolution-lane-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
+
+.resolution-totals {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.resolution-total {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 24px;
+  border-radius: 12px;
+  background: rgba(30, 30, 50, 0.9);
+  border: 2px solid #4a5568;
+  transition: all 0.3s ease;
+}
+
+.resolution-total.winner {
+  border-color: #4ade80;
+  box-shadow: 0 0 20px rgba(74, 222, 128, 0.5);
+  animation: winner-pulse 0.5s ease-out 0.5s;
+}
+
+.resolution-total.loser {
+  border-color: #f87171;
+  opacity: 0.7;
+}
+
+@keyframes winner-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+
+.resolution-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.resolution-total.opponent .resolution-label {
+  color: #f87171;
+}
+
+.resolution-total.player .resolution-label {
+  color: #4ade80;
+}
+
+.resolution-value {
+  font-size: 36px;
+  font-weight: 800;
+  color: #fff;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+.resolution-total.winner .resolution-value {
+  color: #4ade80;
+  text-shadow: 0 0 15px rgba(74, 222, 128, 0.6);
+}
+
+.resolution-total.loser .resolution-value {
+  color: #f87171;
+}
+
+.resolution-vs {
+  font-size: 24px;
+  font-weight: 800;
+  color: #fbbf24;
+  text-shadow: 0 0 10px rgba(251, 191, 36, 0.5);
+  animation: vs-clash 0.6s ease-out 0.3s both;
+}
+
+@keyframes vs-clash {
+  0% {
+    transform: scale(2);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.resolution-damage {
+  font-size: 18px;
+  font-weight: 700;
+  padding: 10px 24px;
+  border-radius: 8px;
+  animation: damage-appear 0.4s ease-out 0.8s both;
+}
+
+@keyframes damage-appear {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.resolution-damage.dealt {
+  background: linear-gradient(135deg, #065f46, #047857);
+  color: #4ade80;
+  border: 2px solid #4ade80;
+  box-shadow: 0 0 20px rgba(74, 222, 128, 0.4);
+}
+
+.resolution-damage.taken {
+  background: linear-gradient(135deg, #7f1d1d, #991b1b);
+  color: #fca5a5;
+  border: 2px solid #f87171;
+  box-shadow: 0 0 20px rgba(248, 113, 113, 0.4);
+}
+
+.resolution-tie {
+  font-size: 16px;
+  font-weight: 600;
+  color: #9ca3af;
+  animation: damage-appear 0.4s ease-out 0.8s both;
+}
+
+/* Effects section in resolution overlay */
+.resolution-effects {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 10px 20px;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  animation: damage-appear 0.4s ease-out 1.2s both;
+}
+
+.effects-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 2px;
+}
+
+.effect-item {
+  font-size: 14px;
+  font-weight: 700;
+  padding: 4px 12px;
+  border-radius: 4px;
+}
+
+.effect-item.damage-effect {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.2);
+  text-shadow: 0 0 8px rgba(248, 113, 113, 0.5);
+}
+
+.effect-item.heal-effect {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.2);
+  text-shadow: 0 0 8px rgba(74, 222, 128, 0.5);
+}
+
+.effect-item.heal-effect.to-opponent {
+  color: #c084fc;
+  background: rgba(168, 85, 247, 0.2);
+  text-shadow: 0 0 8px rgba(168, 85, 247, 0.5);
 }
 
 .your-turn-text {

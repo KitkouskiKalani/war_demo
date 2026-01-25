@@ -25,10 +25,15 @@ Each player starts at **100 HP**. The game is played over one or more rounds usi
   - Ace (A) → 14
   - Joker → **15**
 
-- Jokers are **wild** for poker-style patterns:
-  - They can count as any rank and any suit when evaluating pairs/straights/flushes/etc.
-  - When computing a combo, they always choose the assignment that yields the **highest possible bonus**.
-  - For base numeric value, a Joker is always **15**, regardless of what rank/suit it mimics.
+- Jokers are **wild** and **position-flexible**:
+  - They can be played at **any position** in a lane (first, second, or third)
+  - They dynamically become the optimal rank/suit for the best poker bonus
+  - **Value Cap Rule**: A Joker's value is capped by the **minimum value of cards played AFTER it**
+    - Example: Joker (first) → Queen (second) → King (third, same suit) = Joker becomes Jack for straight flush (J-Q-K)
+    - Example: Joker (first) → 2 (second) = Joker becomes 2 (pair), max value is now 2
+    - Example: 2 (first) → Joker (second) → 4 (third) = Joker max is 4, becomes 3 for straight (2-3-4)
+  - If a Joker is played **last** (on top), it can be up to value **15** (Ace + 1)
+  - The Joker's **damage value** is its resolved rank, not always 15
 
 ---
 

@@ -10,6 +10,7 @@
 import { useReducer, useEffect, useState, useCallback, useRef } from 'react'
 import { gameReducer, canPlayCardToLane, canEndTurn, executeAITurn } from '../game'
 import { initializeNewGame } from '../game/state'
+import { calculateBaseSum, evaluateLaneBonus } from '../game/poker'
 import type { LaneId, Lane, StandardSuit, GameMode, CurrentPlayer } from '../game/types'
 import { CardView } from './CardView'
 import * as Network from '../network/peer'
@@ -62,11 +63,32 @@ export function GameBoard() {
   const [flipAnimationStage, setFlipAnimationStage] = useState<'cards' | 'result' | 'damage'>('cards')
   const [aiSupportGlowing, setAISupportGlowing] = useState(false)
   
+  // HP animation state - track previous HP to show damage animation
+  const [player1DisplayHP, setPlayer1DisplayHP] = useState(state.player1.hp)
+  const [player2DisplayHP, setPlayer2DisplayHP] = useState(state.player2.hp)
+  const [player1TakingDamage, setPlayer1TakingDamage] = useState(false)
+  const [player2TakingDamage, setPlayer2TakingDamage] = useState(false)
+  // Pending HP targets - used to delay animation until after resolution overlay closes
+  const [pendingHP, setPendingHP] = useState<{ p1: number; p2: number } | null>(null)
+  
+  // Lane resolution animation state
+  const [resolutionAnimation, setResolutionAnimation] = useState<{
+    laneId: LaneId
+    p1Total: number
+    p2Total: number
+    winner: 1 | 2 | 'tie'
+    damage: number
+    baseDamage: number
+    bonusDamage: number
+    bonusHealing: number
+  } | null>(null)
+  
   // Drag and drop state
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null)
-  const [dragGhostPosition, setDragGhostPosition] = useState<{ x: number; y: number } | null>(null)
   const [dragOverLaneId, setDragOverLaneId] = useState<LaneId | null>(null)
+  const [showDragGhost, setShowDragGhost] = useState(false)  // Show custom drag ghost (for both touch and PC)
   const draggingCardRef = useRef<{ card: any; ownerSuit: StandardSuit | null } | null>(null)
+  const dragGhostRef = useRef<HTMLDivElement | null>(null)
   
   // Online multiplayer state
   const [joinRoomCode, setJoinRoomCode] = useState('')
@@ -110,9 +132,142 @@ export function GameBoard() {
     dispatch({ type: 'START_NEW_GAME' })
   }, [])
 
+  // Track the last resolution timestamp to detect new resolutions
+  const lastResolutionTimestampRef = useRef<number>(0)
+  
+  // Detect lane resolution and show animation using reducer's lastLaneResolution
+  useEffect(() => {
+    const resolution = state.lastLaneResolution
+    if (!resolution) return
+    
+    // Only trigger animation for new resolutions (check timestamp)
+    if (resolution.timestamp <= lastResolutionTimestampRef.current) return
+    lastResolutionTimestampRef.current = resolution.timestamp
+    
+    // Determine winner relative to local perspective
+    const isOnlineGuest = state.gameMode === 'online' && state.localPlayer === 2
+    const isHotseatP2Turn = state.gameMode === 'vs-player' && state.currentPlayer === 2
+    const shouldFlipPerspective = isOnlineGuest || isHotseatP2Turn
+    
+    // In flipped perspective: P2 is "you", P1 is "opponent"
+    const localWinner = resolution.winner === null 
+      ? 'tie' as const
+      : shouldFlipPerspective 
+        ? (resolution.winner === 2 ? 1 : 2) 
+        : resolution.winner
+    
+    setResolutionAnimation({
+      laneId: resolution.laneId,
+      p1Total: shouldFlipPerspective ? resolution.player2Total : resolution.player1Total,
+      p2Total: shouldFlipPerspective ? resolution.player1Total : resolution.player2Total,
+      winner: localWinner === 'tie' ? 'tie' : (localWinner as 1 | 2),
+      damage: resolution.damage,
+      baseDamage: resolution.baseDamage,
+      bonusDamage: resolution.bonusDamage,
+      bonusHealing: resolution.bonusHealing,
+    })
+    
+    // Clear animation after 3.5 seconds (extra second to show bonus effects)
+    const timeoutId = setTimeout(() => {
+      setResolutionAnimation(null)
+    }, 3500)
+    
+    return () => clearTimeout(timeoutId)
+  }, [state.lastLaneResolution, state.gameMode, state.localPlayer, state.currentPlayer])
+
+  // Animate HP changes with damage flash effect
+  // When HP changes during resolution overlay, store as pending instead of animating immediately
+  useEffect(() => {
+    const p1Changed = state.player1.hp !== player1DisplayHP
+    const p2Changed = state.player2.hp !== player2DisplayHP
+    
+    if (!p1Changed && !p2Changed) return
+    
+    // If resolution animation is showing, delay the HP animation
+    if (resolutionAnimation) {
+      setPendingHP({ p1: state.player1.hp, p2: state.player2.hp })
+      return
+    }
+    
+    // No overlay - animate immediately
+    if (state.player1.hp < player1DisplayHP) {
+      animateHP(1, player1DisplayHP, state.player1.hp)
+    } else if (p1Changed) {
+      setPlayer1DisplayHP(state.player1.hp)
+    }
+    
+    if (state.player2.hp < player2DisplayHP) {
+      animateHP(2, player2DisplayHP, state.player2.hp)
+    } else if (p2Changed) {
+      setPlayer2DisplayHP(state.player2.hp)
+    }
+  }, [state.player1.hp, state.player2.hp])
+  
+  // When resolution overlay closes, trigger pending HP animation
+  useEffect(() => {
+    if (resolutionAnimation === null && pendingHP) {
+      // Overlay just closed - now animate the HP change
+      if (pendingHP.p1 < player1DisplayHP) {
+        animateHP(1, player1DisplayHP, pendingHP.p1)
+      } else if (pendingHP.p1 !== player1DisplayHP) {
+        setPlayer1DisplayHP(pendingHP.p1)
+      }
+      
+      if (pendingHP.p2 < player2DisplayHP) {
+        animateHP(2, player2DisplayHP, pendingHP.p2)
+      } else if (pendingHP.p2 !== player2DisplayHP) {
+        setPlayer2DisplayHP(pendingHP.p2)
+      }
+      
+      setPendingHP(null)
+    }
+  }, [resolutionAnimation, pendingHP])
+  
+  // Helper function to animate HP decrease with flash effect
+  const animateHP = (player: 1 | 2, startHP: number, targetHP: number) => {
+    if (player === 1) {
+      setPlayer1TakingDamage(true)
+    } else {
+      setPlayer2TakingDamage(true)
+    }
+    
+    const duration = 2000
+    const startTime = Date.now()
+    
+    const animate = () => {
+      const elapsed = Date.now() - startTime
+      const progress = Math.min(elapsed / duration, 1)
+      const currentHP = Math.round(startHP - (startHP - targetHP) * progress)
+      
+      if (player === 1) {
+        setPlayer1DisplayHP(currentHP)
+      } else {
+        setPlayer2DisplayHP(currentHP)
+      }
+      
+      if (progress < 1) {
+        requestAnimationFrame(animate)
+      } else {
+        if (player === 1) {
+          setPlayer1TakingDamage(false)
+        } else {
+          setPlayer2TakingDamage(false)
+        }
+      }
+    }
+    requestAnimationFrame(animate)
+  }
+
   // Auto-trigger the war flip when entering InitialFlip phase
+  // In online mode, only the HOST executes the flip to avoid desync
   useEffect(() => {
     if (state.phase === 'InitialFlip') {
+      // In online mode, only host triggers the flip
+      if (state.gameMode === 'online' && !state.isHost) {
+        // Guest waits for host to send flip result
+        return
+      }
+      
       // Small delay before auto-flipping for smoother transition
       const flipTimer = setTimeout(() => {
         dispatch({ type: 'INITIAL_FLIP_STEP' })
@@ -120,12 +275,26 @@ export function GameBoard() {
       
       return () => clearTimeout(flipTimer)
     }
-  }, [state.phase])
+  }, [state.phase, state.gameMode, state.isHost])
 
   // Handle flip animation stages
   useEffect(() => {
     if (state.phase === 'InitialFlipResult') {
       setFlipAnimationStage('cards')
+      
+      // In online mode, host syncs the flip result state to guest
+      if (state.gameMode === 'online' && state.isHost && Network.isConnected()) {
+        // Send the full state including flip result and deck state to guest
+        Network.sendAction({ 
+          type: 'FLIP_RESULT_SYNC', 
+          state: {
+            ...state,
+            // Guest needs to know they're not host
+            isHost: false,
+            localPlayer: 2,
+          }
+        })
+      }
       
       // Stage 1: Show cards (1.5s)
       const timer1 = setTimeout(() => {
@@ -148,7 +317,7 @@ export function GameBoard() {
         clearTimeout(timer3)
       }
     }
-  }, [state.phase])
+  }, [state.phase, state.gameMode, state.isHost])
 
   // AI Turn Handler
   const executeAI = useCallback(async () => {
@@ -222,6 +391,12 @@ export function GameBoard() {
     
     // Handle state sync (for guest joining)
     if (action.type === 'STATE_SYNC') {
+      dispatch({ type: 'SYNC_STATE', state: action.state })
+    }
+    
+    // Handle flip result sync from host (fixes war flip desync between clients)
+    if (action.type === 'FLIP_RESULT_SYNC') {
+      console.log('[GameBoard] Received flip result sync from host')
       dispatch({ type: 'SYNC_STATE', state: action.state })
     }
   }, [])
@@ -415,17 +590,35 @@ export function GameBoard() {
   }
 
   // Drag handlers for desktop (HTML5 Drag API)
-  const handleDragStart = (cardId: string, card: any, ownerSuit: StandardSuit | null) => {
+  const handleDragStart = (e: React.DragEvent, cardId: string, card: any, ownerSuit: StandardSuit | null) => {
     if (!canAct) return
     setDraggingCardId(cardId)
     setSelectedCardId(null) // Deselect when starting drag
+    setShowDragGhost(true)  // Show our custom ghost for PC too
     draggingCardRef.current = { card, ownerSuit }
+    
+    // Set initial ghost position
+    requestAnimationFrame(() => {
+      if (dragGhostRef.current) {
+        dragGhostRef.current.style.left = `${e.clientX}px`
+        dragGhostRef.current.style.top = `${e.clientY}px`
+      }
+    })
+  }
+  
+  // Track cursor position during drag (for ghost on PC)
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()  // Required to allow drop
+    if (draggingCardId && dragGhostRef.current) {
+      dragGhostRef.current.style.left = `${e.clientX}px`
+      dragGhostRef.current.style.top = `${e.clientY}px`
+    }
   }
 
   const handleDragEnd = () => {
     setDraggingCardId(null)
     setDragOverLaneId(null)
-    setDragGhostPosition(null)
+    setShowDragGhost(false)
     draggingCardRef.current = null
   }
 
@@ -463,7 +656,7 @@ export function GameBoard() {
     handleDragEnd()
   }
 
-  // Touch handlers for mobile
+  // Touch handlers for mobile - use direct DOM manipulation for ghost position to avoid re-renders
   const handleTouchStart = (e: React.TouchEvent, cardId: string, card: any, ownerSuit: StandardSuit | null) => {
     if (!canAct) return
     e.preventDefault() // Prevent default to avoid scroll during drag
@@ -471,8 +664,16 @@ export function GameBoard() {
     const touch = e.touches[0]
     setDraggingCardId(cardId)
     setSelectedCardId(null)
-    setDragGhostPosition({ x: touch.clientX, y: touch.clientY })
+    setShowDragGhost(true)  // Show the custom drag ghost
     draggingCardRef.current = { card, ownerSuit }
+    
+    // Set initial position via ref after render
+    requestAnimationFrame(() => {
+      if (dragGhostRef.current) {
+        dragGhostRef.current.style.left = `${touch.clientX}px`
+        dragGhostRef.current.style.top = `${touch.clientY}px`
+      }
+    })
   }
 
   const handleTouchMove = (e: React.TouchEvent) => {
@@ -480,9 +681,17 @@ export function GameBoard() {
     e.preventDefault()
     
     const touch = e.touches[0]
-    setDragGhostPosition({ x: touch.clientX, y: touch.clientY })
     
-    // Check what's under the touch point
+    // Update ghost position directly via DOM ref - no state update, no re-render
+    if (dragGhostRef.current) {
+      dragGhostRef.current.style.left = `${touch.clientX}px`
+      dragGhostRef.current.style.top = `${touch.clientY}px`
+    }
+    
+    // Check what's under the touch point (hide ghost briefly to detect element underneath)
+    if (dragGhostRef.current) {
+      dragGhostRef.current.style.pointerEvents = 'none'
+    }
     const laneId = getLaneUnderPoint(touch.clientX, touch.clientY)
     if (laneId && canPlayCardToLane(state, draggingCardId, laneId)) {
       setDragOverLaneId(laneId)
@@ -544,32 +753,54 @@ export function GameBoard() {
     const bottomCards = shouldFlipPerspective ? lane.player2.cards : lane.player1.cards
     const topSuit = shouldFlipPerspective ? state.player1Suit : state.player2Suit
     const bottomSuit = shouldFlipPerspective ? state.player2Suit : state.player1Suit
+    
+    // Calculate lane totals for display (base sum + poker bonus)
+    const topBaseSum = calculateBaseSum(topCards)
+    const topBonus = evaluateLaneBonus(topCards)
+    const bottomBaseSum = calculateBaseSum(bottomCards)
+    const bottomBonus = evaluateLaneBonus(bottomCards)
 
     return (
-      <div 
-        className={`lane ${targetable ? 'lane-targetable' : ''} ${dropTarget ? 'lane-drop-target' : ''} ${isDragOver ? 'lane-drag-over' : ''} ${glowClass}`}
+      <div className="lane-wrapper">
+        {/* Opponent lane total (outside, above) */}
+        <div className={`lane-total opponent ${topBaseSum > 0 ? 'has-value' : ''}`}>
+          {topBaseSum > 0 ? (
+            topBonus > 0 ? (
+              <><span className="base-sum">{topBaseSum}</span><span className="bonus-separator">|</span><span className="bonus-value">{topBonus}</span></>
+            ) : topBaseSum
+          ) : '—'}
+        </div>
+        
+        <div 
+          className={`lane ${targetable ? 'lane-targetable' : ''} ${dropTarget ? 'lane-drop-target' : ''} ${isDragOver ? 'lane-drag-over' : ''} ${glowClass}`}
         onClick={() => targetable && handleLaneClick(lane.id)}
-        data-lane-id={lane.id}
-        onDragOver={(e) => handleDragOverLane(e, lane.id)}
-        onDragLeave={handleDragLeaveLane}
-        onDrop={() => handleDropOnLane(lane.id)}
-      >
-        {/* Pending resolution indicator */}
-        {pendingInfo && (
-          <div className={`lane-pending-indicator ${pendingInfo.turnsUntilResolution === 1 ? 'urgent' : ''}`}>
-            Resolves in {pendingInfo.turnsUntilResolution}
-          </div>
-        )}
+          data-lane-id={lane.id}
+          onDragOver={(e) => handleDragOverLane(e, lane.id)}
+          onDragLeave={handleDragLeaveLane}
+          onDrop={() => handleDropOnLane(lane.id)}
+        >
+          {/* Pending resolution indicator */}
+          {pendingInfo && (
+            <div className={`lane-pending-indicator ${pendingInfo.turnsUntilResolution === 1 ? 'urgent' : ''}`}>
+              Resolves in {pendingInfo.turnsUntilResolution}
+            </div>
+          )}
 
-        {/* Opponent cards (top) - stacked vertically */}
-        <div className="lane-cards-stack opponent">
-          {topCards.length === 0 ? (
-            <div className="lane-empty">—</div>
-          ) : (
-            topCards.map((card, idx) => (
-              <div key={card.id} className="stacked-card" style={{ zIndex: idx }}>
-                <CardView card={card} small ownerSuit={topSuit} />
-              </div>
+          {/* Opponent cards (top) - stacked vertically */}
+          <div className="lane-cards-stack opponent">
+            {topCards.length === 0 ? (
+              <div className="lane-empty">—</div>
+            ) : (
+              topCards.map((card, idx) => (
+                <div key={card.id} className="stacked-card" style={{ zIndex: idx }}>
+                  <CardView 
+                    card={card} 
+                    small 
+                    ownerSuit={topSuit}
+                    laneCards={topCards}
+                    cardIndexInLane={idx}
+                  />
+                </div>
             ))
           )}
         </div>
@@ -580,25 +811,41 @@ export function GameBoard() {
           {targetable && <span style={{ color: '#fbbf24' }}> ▼</span>}
         </div>
 
-        {/* Local player cards (bottom) - stacked vertically */}
-        <div className="lane-cards-stack player">
-          {bottomCards.length === 0 ? (
-            <div className="lane-empty">—</div>
-          ) : (
-            bottomCards.map((card, idx) => (
-              <div key={card.id} className="stacked-card" style={{ zIndex: idx }}>
-                <CardView card={card} small ownerSuit={bottomSuit} />
-              </div>
-            ))
-          )}
+          {/* Local player cards (bottom) - stacked vertically */}
+          <div className="lane-cards-stack player">
+            {bottomCards.length === 0 ? (
+              <div className="lane-empty">—</div>
+            ) : (
+              bottomCards.map((card, idx) => (
+                <div key={card.id} className="stacked-card" style={{ zIndex: idx }}>
+                  <CardView 
+                    card={card} 
+                    small 
+                    ownerSuit={bottomSuit}
+                    laneCards={bottomCards}
+                    cardIndexInLane={idx}
+                  />
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+        
+        {/* Player lane total (outside, below) */}
+        <div className={`lane-total player ${bottomBaseSum > 0 ? 'has-value' : ''}`}>
+          {bottomBaseSum > 0 ? (
+            bottomBonus > 0 ? (
+              <><span className="base-sum">{bottomBaseSum}</span><span className="bonus-separator">|</span><span className="bonus-value">{bottomBonus}</span></>
+            ) : bottomBaseSum
+          ) : '—'}
         </div>
       </div>
     )
   }
 
   // Avatar component with pentagonal frame
-  const Avatar = ({ suit, isPlayer }: { suit: StandardSuit | null; isPlayer: boolean }) => (
-    <div className={`avatar-frame ${isPlayer ? 'player' : 'opponent'}`}>
+  const Avatar = ({ suit, isPlayer, takingDamage = false }: { suit: StandardSuit | null; isPlayer: boolean; takingDamage?: boolean }) => (
+    <div className={`avatar-frame ${isPlayer ? 'player' : 'opponent'} ${takingDamage ? 'taking-damage' : ''}`}>
       <img src={getAvatarPath(suit)} alt={isPlayer ? 'Player avatar' : 'AI avatar'} />
     </div>
   )
@@ -632,9 +879,13 @@ export function GameBoard() {
     </div>
   )
 
+  // Calculate hands remaining (minimum of both players' decks / 3)
+  const handsRemaining = Math.floor(Math.min(state.player1.deck.length, state.player2.deck.length) / 3)
+  const deckGlowClass = handsRemaining === 2 ? 'deck-glow-warning' : handsRemaining <= 1 ? 'deck-glow-danger' : ''
+
   // Draw pile component - now uses field control suit for card back
-  const DrawPile = ({ count }: { count: number }) => (
-    <div className="draw-pile">
+  const DrawPile = ({ count, glowClass = '' }: { count: number; glowClass?: string }) => (
+    <div className={`draw-pile ${glowClass}`}>
       <CardView 
         card={{ id: 'draw-pile', suit: 'hearts', rank: 2 }} 
         faceDown 
@@ -1043,12 +1294,59 @@ export function GameBoard() {
       style={backgroundStyle}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
+      onDragOver={handleDragOver}
     >
       
       {/* Your Turn Popup (Online mode) */}
       {showYourTurn && (
         <div className="your-turn-popup">
           <div className="your-turn-text">YOUR TURN!</div>
+        </div>
+      )}
+      
+      {/* Lane Resolution Animation Overlay */}
+      {resolutionAnimation && (
+        <div className="resolution-overlay">
+          <div className="resolution-content">
+            <div className="resolution-lane-name">
+              {resolutionAnimation.laneId.toUpperCase()} LANE
+            </div>
+            <div className="resolution-totals">
+              <div className={`resolution-total opponent ${resolutionAnimation.winner === 2 ? 'winner' : resolutionAnimation.winner === 1 ? 'loser' : ''}`}>
+                <span className="resolution-label">OPPONENT</span>
+                <span className="resolution-value">{resolutionAnimation.p2Total}</span>
+              </div>
+              <div className="resolution-vs">VS</div>
+              <div className={`resolution-total player ${resolutionAnimation.winner === 1 ? 'winner' : resolutionAnimation.winner === 2 ? 'loser' : ''}`}>
+                <span className="resolution-label">YOU</span>
+                <span className="resolution-value">{resolutionAnimation.p1Total}</span>
+              </div>
+            </div>
+            {resolutionAnimation.winner !== 'tie' && (
+              <div className={`resolution-damage ${resolutionAnimation.winner === 1 ? 'dealt' : 'taken'}`}>
+                {resolutionAnimation.winner === 1 
+                  ? `${resolutionAnimation.damage} DAMAGE DEALT!` 
+                  : `${resolutionAnimation.damage} DAMAGE TAKEN!`}
+              </div>
+            )}
+            {/* Show effects section if there are any bonuses */}
+            {resolutionAnimation.winner !== 'tie' && (resolutionAnimation.bonusDamage > 0 || resolutionAnimation.bonusHealing > 0) && (
+              <div className="resolution-effects">
+                <span className="effects-label">Effects:</span>
+                {resolutionAnimation.bonusDamage > 0 && (
+                  <span className="effect-item damage-effect">+{resolutionAnimation.bonusDamage} damage</span>
+                )}
+                {resolutionAnimation.bonusHealing > 0 && (
+                  <span className={`effect-item heal-effect ${resolutionAnimation.winner === 1 ? 'to-you' : 'to-opponent'}`}>
+                    +{resolutionAnimation.bonusHealing} heal to {resolutionAnimation.winner === 1 ? 'you' : 'opponent'}
+                  </span>
+                )}
+              </div>
+            )}
+            {resolutionAnimation.winner === 'tie' && (
+              <div className="resolution-tie">TIE - NO DAMAGE</div>
+            )}
+          </div>
         </div>
       )}
       
@@ -1065,6 +1363,8 @@ export function GameBoard() {
           const opponentData = shouldFlipPerspective ? state.player1 : state.player2
           const opponentSuit = shouldFlipPerspective ? state.player1Suit : state.player2Suit
           const opponentSupportAvailable = shouldFlipPerspective ? state.player1SupportAvailable : state.player2SupportAvailable
+          const opponentDisplayHP = shouldFlipPerspective ? player1DisplayHP : player2DisplayHP
+          const opponentTakingDamage = shouldFlipPerspective ? player1TakingDamage : player2TakingDamage
           
           return (
             <>
@@ -1079,23 +1379,23 @@ export function GameBoard() {
                     cardBackType="ai" 
                     cardBackSuit={state.fieldControlSuit}
                   />
-                ))}
-              </div>
+          ))}
+          </div>
 
               {/* Opponent Avatar area with HP */}
               <div className="hero-float opponent">
-                <HPDisplay hp={opponentData.hp} isPlayer={false} />
-                <Avatar suit={opponentSuit} isPlayer={false} />
+                <HPDisplay hp={opponentDisplayHP} isPlayer={false} />
+                <Avatar suit={opponentSuit} isPlayer={false} takingDamage={opponentTakingDamage} />
                 <SupportIcon 
                   suit={opponentSuit} 
                   isPlayer={false} 
                   available={opponentSupportAvailable || aiSupportGlowing}
                 />
-              </div>
+          </div>
             </>
           )
         })()}
-      </div>
+        </div>
 
       {/* ===== MIDDLE: Game Board ===== */}
       <div className="middle-section">
@@ -1115,7 +1415,7 @@ export function GameBoard() {
         {/* Board Row: Draw Piles | Lanes | Discard + End Turn */}
         {state.phase === 'Main' && (
           <div className="board-area">
-            <div className="board-row">
+          <div className="board-row">
               {/* Draw Piles - LEFT (with perspective flip for online AND hotseat) */}
               <div className="draw-piles-column">
                 {(() => {
@@ -1127,19 +1427,19 @@ export function GameBoard() {
                   const bottomDeckCount = shouldFlipPerspective ? state.player2.deck.length : state.player1.deck.length
                   return (
                     <>
-                      <DrawPile count={topDeckCount} />
-                      <DrawPile count={bottomDeckCount} />
+                      <DrawPile count={topDeckCount} glowClass={deckGlowClass} />
+                      <DrawPile count={bottomDeckCount} glowClass={deckGlowClass} />
                     </>
                   )
                 })()}
-              </div>
+            </div>
 
-              {/* The 3 Lanes - CENTER */}
-              <div className="lanes-container">
-                {state.lanes.map(lane => (
-                  <LaneView key={lane.id} lane={lane} />
-                ))}
-              </div>
+            {/* The 3 Lanes - CENTER */}
+            <div className="lanes-container">
+              {state.lanes.map(lane => (
+                <LaneView key={lane.id} lane={lane} />
+              ))}
+            </div>
 
               {/* Discard + End Turn - RIGHT */}
               <div className="side-action-right">
@@ -1152,13 +1452,13 @@ export function GameBoard() {
                   <img src={DISCARD_BACK} alt="Discard pile" className="discard-image" />
                   <span className="discard-count">{state.discardPile.length}</span>
                 </div>
-                <button 
-                  className="end-turn-btn"
-                  onClick={handleEndTurn}
+              <button 
+                className="end-turn-btn"
+                onClick={handleEndTurn}
                   disabled={!canEndTurn(state) || !isLocalPlayerTurn}
-                >
-                  END<br/>TURN
-                </button>
+              >
+                END<br/>TURN
+              </button>
                 <span className="cards-played">{state.cardsPlayedThisTurn}/3</span>
               </div>
             </div>
@@ -1169,12 +1469,16 @@ export function GameBoard() {
         <div className="phase-row">
           <div className="phase-banner" style={{ background: phaseColor, color: '#000' }}>
             {state.phase === 'Main' && isLocalPlayerTurn && (
-              state.gameMode === 'vs-player' ? (isPlayerTurn ? 'PLAYER 1 TURN' : 'PLAYER 2 TURN') : 
-              state.gameMode === 'online' ? 'YOUR TURN' : 'YOUR TURN'
+              handsRemaining <= 2 && handsRemaining > 0
+                ? `${handsRemaining} HAND${handsRemaining > 1 ? 'S' : ''} REMAINING`
+                : state.gameMode === 'vs-player' ? (isPlayerTurn ? 'PLAYER 1 TURN' : 'PLAYER 2 TURN') : 
+                  state.gameMode === 'online' ? 'YOUR TURN' : 'YOUR TURN'
             )}
             {state.phase === 'Main' && !isLocalPlayerTurn && (
-              state.gameMode === 'vs-player' ? (isPlayerTurn ? 'PLAYER 1 TURN' : 'PLAYER 2 TURN') :
-              state.gameMode === 'online' ? 'OPPONENT TURN' : 'AI TURN'
+              handsRemaining <= 2 && handsRemaining > 0
+                ? `${handsRemaining} HAND${handsRemaining > 1 ? 'S' : ''} REMAINING`
+                : state.gameMode === 'vs-player' ? (isPlayerTurn ? 'PLAYER 1 TURN' : 'PLAYER 2 TURN') :
+                  state.gameMode === 'online' ? 'OPPONENT TURN' : 'AI TURN'
             )}
             {state.phase === 'InitialFlip' && 'WAR FLIP'}
             {state.phase === 'EndOfRoundResolving' && 'RESOLVING'}
@@ -1210,19 +1514,21 @@ export function GameBoard() {
           const localData = shouldFlipPerspective ? state.player2 : state.player1
           const localSuit = shouldFlipPerspective ? state.player2Suit : state.player1Suit
           const localSupportAvailable = shouldFlipPerspective ? state.player2SupportAvailable : state.player1SupportAvailable
+          const localDisplayHP = shouldFlipPerspective ? player2DisplayHP : player1DisplayHP
+          const localTakingDamage = shouldFlipPerspective ? player2TakingDamage : player1TakingDamage
           
           return (
             <>
               <div className="hero-float player">
-                <HPDisplay hp={localData.hp} isPlayer={true} />
-                <Avatar suit={localSuit} isPlayer={true} />
+                <HPDisplay hp={localDisplayHP} isPlayer={true} />
+                <Avatar suit={localSuit} isPlayer={true} takingDamage={localTakingDamage} />
                 <SupportIcon 
                   suit={localSuit} 
                   isPlayer={true} 
                   available={localSupportAvailable}
                   onClick={handlePlayerUseSupport}
                 />
-              </div>
+        </div>
 
               {/* Local Player Hand - always clickable at bottom */}
               <div 
@@ -1232,16 +1538,16 @@ export function GameBoard() {
               >
                 {state.phase === 'Main' && (
                   localData.hand.map(card => (
-                    <CardView
-                      key={card.id}
-                      card={card}
-                      selected={selectedCardId === card.id}
-                      onClick={() => handleCardClick(card.id)}
-                      disabled={!canAct}
+            <CardView
+              key={card.id}
+              card={card}
+              selected={selectedCardId === card.id}
+              onClick={() => handleCardClick(card.id)}
+              disabled={!canAct}
                       ownerSuit={localSuit}
                       draggable={canAct}
                       isDragging={draggingCardId === card.id}
-                      onDragStart={() => handleDragStart(card.id, card, localSuit)}
+                      onDragStart={(e) => handleDragStart(e, card.id, card, localSuit)}
                       onDragEnd={handleDragEnd}
                       onTouchStart={(e) => handleTouchStart(e, card.id, card, localSuit)}
                     />
@@ -1249,21 +1555,18 @@ export function GameBoard() {
                 )}
                 {state.phase === 'Main' && localData.hand.length === 0 && (
                   <span className="no-cards">No cards</span>
-                )}
-              </div>
+          )}
+        </div>
             </>
           )
         })()}
       </div>
 
-      {/* Drag Ghost - floating card that follows touch position */}
-      {draggingCardId && dragGhostPosition && draggingCardRef.current && (
+      {/* Drag Ghost - floating card that follows cursor/touch position */}
+      {draggingCardId && draggingCardRef.current && showDragGhost && (
         <div 
+          ref={dragGhostRef}
           className="drag-ghost"
-          style={{
-            left: dragGhostPosition.x,
-            top: dragGhostPosition.y,
-          }}
         >
           <CardView 
             card={draggingCardRef.current.card} 
