@@ -185,7 +185,7 @@ export function getJokerInHandTooltip(): CardTooltipData {
  * Joker tooltip data for when on the board (resolved)
  */
 export function getJokerOnBoardTooltip(
-  mimicRank: string,
+  mimicRank: number | string,
   mimicSuit: string,
   mimicValue: number
 ): CardTooltipData {
