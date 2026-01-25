@@ -451,9 +451,9 @@ body {
    ======================================== */
 
 .card {
-  width: 61px;
-  height: 85px;
-  border-radius: 6px;
+  width: 52px;
+  height: 73px;
+  border-radius: 5px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -706,14 +706,14 @@ body {
 
 /* Lane cards - larger to fill lane width */
 .card-small {
-  width: 58px;
-  height: 80px;
+  width: 48px;
+  height: 67px;
 }
 
 @media (min-width: 640px) {
   .card-small {
-    width: 68px;
-    height: 95px;
+    width: 60px;
+    height: 84px;
   }
 }
 
@@ -788,19 +788,21 @@ body {
 
 /* Player avatar area - larger and repositioned */
 .hero-float.player {
-  margin-top: -35px;
-  margin-bottom: -15px;
+  margin-top: -30px;
+  margin-bottom: -10px;
+  transform: scale(0.85);
+  transform-origin: center top;
 }
 
 .hero-float.player .avatar-frame {
-  width: 100px;
-  height: 119px;
+  width: 90px;
+  height: 107px;
 }
 
 .hero-float.player .support-icon {
-  width: 60px;
-  height: 60px;
-  margin-left: 8px;
+  width: 50px;
+  height: 50px;
+  margin-left: 6px;
 }
 
 /* Support ability available state - glowing effect */
@@ -873,23 +875,23 @@ body {
   background: linear-gradient(180deg, rgba(60, 70, 80, 0.9) 0%, rgba(80, 90, 100, 0.95) 100%);
   border: 2px solid #5a6a7a;
   border-radius: 8px;
-  padding: 4px;
+  padding: 3px;
   display: flex;
   flex-direction: column;
   gap: 2px;
   transition: all 0.3s ease;
-  width: 72px;
+  width: 58px;
   flex-shrink: 0;
-  height: 310px;
+  height: 260px;
   justify-content: space-between;
   position: relative;
 }
 
 @media (min-width: 640px) {
   .lane {
-    padding: 6px;
-    width: 88px;
-    height: 360px;
+    padding: 5px;
+    width: 78px;
+    height: 320px;
   }
 }
 
@@ -1151,12 +1153,12 @@ body {
 }
 
 .end-turn-btn {
-  padding: 10px 14px;
-  font-size: 11px;
+  padding: 8px 10px;
+  font-size: 10px;
   font-weight: bold;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  border-radius: 8px;
+  border-radius: 6px;
   border: none;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -1207,12 +1209,12 @@ body {
 }
 
 .phase-banner {
-  padding: 6px 16px;
-  border-radius: 20px;
+  padding: 4px 12px;
+  border-radius: 16px;
   font-weight: bold;
   text-transform: uppercase;
   letter-spacing: 1px;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 @media (min-width: 640px) {
@@ -1313,8 +1315,9 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 8px;
-  gap: 6px;
+  padding: 4px;
+  padding-top: max(4px, env(safe-area-inset-top, 4px));
+  gap: 4px;
   background: linear-gradient(180deg, rgba(0, 0, 0, 0.3) 0%, transparent 100%);
 }
 
@@ -1330,18 +1333,18 @@ body {
   flex-direction: column;
   justify-content: flex-start;
   align-items: center;
-  gap: 10px;
-  padding: 8px;
-  padding-top: 15px;
-  margin-top: 0;
+  gap: 6px;
+  padding: 4px;
+  padding-top: 5px;
+  margin-top: -10px;
 }
 
 .bottom-section {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 4px;
-  padding-bottom: max(4px, env(safe-area-inset-bottom, 4px));
+  padding: 2px;
+  padding-bottom: max(8px, env(safe-area-inset-bottom, 8px));
   gap: 0;
   background: linear-gradient(0deg, rgba(0, 0, 0, 0.3) 0%, transparent 100%);
   flex-shrink: 0;
@@ -1441,10 +1444,10 @@ body {
 .hand-container {
   display: flex;
   justify-content: center;
-  gap: 3px;
+  gap: 2px;
   flex-wrap: nowrap;
-  padding: 4px;
-  padding-top: 12px;
+  padding: 2px;
+  padding-top: 8px;
   overflow: visible;
 }
 
