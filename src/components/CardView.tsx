@@ -6,7 +6,6 @@
 import { useState, useRef, useEffect } from 'react'
 import type { Card, StandardSuit } from '../game/types'
 import { getCardTooltipData, getJokerOnBoardTooltip } from '../game/suitEffects'
-import { getJokerMimicInfo } from '../game/poker'
 
 interface CardViewProps {
   card: Card
@@ -138,6 +137,7 @@ export function CardView({
     !faceDown && isActive ? 'card-active' : '',
     !faceDown && !isActive ? 'card-inactive' : '',
     isDragging ? 'card-dragging' : '',
+    showTooltip ? 'tooltip-visible' : '',
     draggable && !disabled ? 'card-draggable' : '',
   ].filter(Boolean).join(' ')
 
@@ -151,11 +151,9 @@ export function CardView({
     if (faceDown || !ownerSuit) return null
     
     // Check if this is a Joker on the board (has lane context)
+    // Jokers don't resolve until lane resolution - show generic tooltip
     if (card.rank === 'JOKER' && laneCards && cardIndexInLane !== undefined) {
-      const mimicInfo = getJokerMimicInfo(laneCards, cardIndexInLane)
-      if (mimicInfo) {
-        return getJokerOnBoardTooltip(mimicInfo.rank, mimicInfo.suit, mimicInfo.value)
-      }
+      return getJokerOnBoardTooltip()
     }
     
     // Regular card or Joker in hand

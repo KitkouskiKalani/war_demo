@@ -32,8 +32,6 @@ body {
   overflow: hidden;
   position: relative;
   /* Background applied dynamically via inline style based on field control suit */
-  /* Safe area for mobile browsers */
-  padding-bottom: env(safe-area-inset-bottom, 0px);
   /* Prevent pull-to-refresh and scroll during drag */
   overscroll-behavior: none;
 }
@@ -531,6 +529,12 @@ body {
    CARD TOOLTIP STYLES
    ======================================== */
 
+/* When a card shows tooltip, raise it above everything except overlays */
+.card.tooltip-visible {
+  z-index: 9998 !important;
+  isolation: isolate;
+}
+
 .card-tooltip {
   position: absolute;
   bottom: calc(100% + 8px);
@@ -540,7 +544,7 @@ body {
   border-radius: 8px;
   font-size: 12px;
   white-space: nowrap;
-  z-index: 100;
+  z-index: 9999;
   pointer-events: none;
   animation: tooltip-appear 0.2s ease-out;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
@@ -653,11 +657,18 @@ body {
 /* Drag ghost - follows touch/cursor during drag */
 .drag-ghost {
   position: fixed;
+  left: 0;
+  top: 0;
   pointer-events: none;
   z-index: 1000;
-  transform: translate(-50%, -50%) scale(1.1) rotate(-5deg);
   filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.6));
   animation: ghost-pickup 0.15s ease-out;
+  /* Performance optimizations for smooth mobile drag */
+  will-change: transform;
+  -webkit-transform: translate3d(0, 0, 0);
+  transform: translate3d(0, 0, 0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
 }
 
 @keyframes ghost-pickup {
@@ -757,6 +768,23 @@ body {
   50% {
     filter: brightness(1.8) saturate(0) sepia(1) hue-rotate(-50deg);
     box-shadow: 0 0 40px rgba(239, 68, 68, 1), inset 0 0 20px rgba(239, 68, 68, 0.5);
+    transform: scale(1.05);
+  }
+}
+
+/* Healing flash animation - green glow */
+.avatar-frame.healing {
+  animation: heal-flash 0.4s ease-in-out 5;
+}
+
+@keyframes heal-flash {
+  0%, 100% {
+    filter: brightness(1) saturate(1);
+    transform: scale(1);
+  }
+  50% {
+    filter: brightness(1.5) saturate(1.2) hue-rotate(80deg);
+    box-shadow: 0 0 40px rgba(34, 197, 94, 1), inset 0 0 20px rgba(34, 197, 94, 0.5);
     transform: scale(1.05);
   }
 }
@@ -1316,7 +1344,7 @@ body {
   flex-direction: column;
   align-items: center;
   padding: 4px;
-  padding-top: max(4px, env(safe-area-inset-top, 4px));
+  padding-top: max(45px, env(safe-area-inset-top, 45px));
   gap: 4px;
   background: linear-gradient(180deg, rgba(0, 0, 0, 0.3) 0%, transparent 100%);
 }
@@ -1336,7 +1364,7 @@ body {
   gap: 6px;
   padding: 4px;
   padding-top: 5px;
-  margin-top: -10px;
+  margin-top: 0;
 }
 
 .bottom-section {
@@ -1344,7 +1372,7 @@ body {
   flex-direction: column;
   align-items: center;
   padding: 2px;
-  padding-bottom: max(8px, env(safe-area-inset-bottom, 8px));
+  padding-bottom: env(safe-area-inset-bottom, 0px);
   gap: 0;
   background: linear-gradient(0deg, rgba(0, 0, 0, 0.3) 0%, transparent 100%);
   flex-shrink: 0;
@@ -1369,13 +1397,13 @@ body {
 
 .lanes-container {
   display: flex;
-  gap: 4px;
+  gap: 12px;
   justify-content: center;
 }
 
 @media (min-width: 640px) {
   .lanes-container {
-    gap: 6px;
+    gap: 8px;
   }
 }
 

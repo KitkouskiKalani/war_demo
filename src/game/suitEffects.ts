@@ -182,21 +182,14 @@ export function getJokerInHandTooltip(): CardTooltipData {
 }
 
 /**
- * Joker tooltip data for when on the board (resolved)
+ * Joker tooltip data for when on the board (not resolved until lane resolution)
  */
-export function getJokerOnBoardTooltip(
-  mimicRank: number | string,
-  mimicSuit: string,
-  mimicValue: number
-): CardTooltipData {
-  const rankName = getRankDisplayName(mimicRank)
-  const suitName = getSuitDisplayName(mimicSuit)
-  
+export function getJokerOnBoardTooltip(): CardTooltipData {
   return {
     header: 'Joker',
-    baseDamage: `Deals ${mimicValue} damage`,
+    baseDamage: 'Mimick',
     effect: null, // Jokers never get suit effects
-    description: `Mimicking ${rankName} of ${suitName}`
+    description: 'Will always resolve as the best card for the situation'
   }
 }
 

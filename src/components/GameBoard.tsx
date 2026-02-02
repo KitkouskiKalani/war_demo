@@ -63,13 +63,15 @@ export function GameBoard() {
   const [flipAnimationStage, setFlipAnimationStage] = useState<'cards' | 'result' | 'damage'>('cards')
   const [aiSupportGlowing, setAISupportGlowing] = useState(false)
   
-  // HP animation state - track previous HP to show damage animation
+  // HP animation state - track previous HP to show damage/heal animation
   const [player1DisplayHP, setPlayer1DisplayHP] = useState(state.player1.hp)
   const [player2DisplayHP, setPlayer2DisplayHP] = useState(state.player2.hp)
   const [player1TakingDamage, setPlayer1TakingDamage] = useState(false)
   const [player2TakingDamage, setPlayer2TakingDamage] = useState(false)
+  const [player1Healing, setPlayer1Healing] = useState(false)
+  const [player2Healing, setPlayer2Healing] = useState(false)
   // Pending HP targets - used to delay animation until after resolution overlay closes
-  const [pendingHP, setPendingHP] = useState<{ p1: number; p2: number } | null>(null)
+  // pendingHP state removed - HP animations now trigger during resolution overlay
   
   // Lane resolution animation state
   const [resolutionAnimation, setResolutionAnimation] = useState<{
@@ -85,10 +87,11 @@ export function GameBoard() {
   
   // Drag and drop state
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null)
-  const [dragOverLaneId, setDragOverLaneId] = useState<LaneId | null>(null)
+  const dragOverLaneIdRef = useRef<LaneId | null>(null)  // Using ref instead of state to avoid re-renders during drag
   const [showDragGhost, setShowDragGhost] = useState(false)  // Show custom drag ghost (for both touch and PC)
   const draggingCardRef = useRef<{ card: any; ownerSuit: StandardSuit | null } | null>(null)
   const dragGhostRef = useRef<HTMLDivElement | null>(null)
+  const dragRAFRef = useRef<number | null>(null)  // For throttling touch move updates
   
   // Online multiplayer state
   const [joinRoomCode, setJoinRoomCode] = useState('')
@@ -134,6 +137,8 @@ export function GameBoard() {
 
   // Track the last resolution timestamp to detect new resolutions
   const lastResolutionTimestampRef = useRef<number>(0)
+  // Track if resolution overlay is showing (ref for synchronous checks)
+  const isResolutionShowingRef = useRef<boolean>(false)
   
   // Detect lane resolution and show animation using reducer's lastLaneResolution
   useEffect(() => {
@@ -143,6 +148,9 @@ export function GameBoard() {
     // Only trigger animation for new resolutions (check timestamp)
     if (resolution.timestamp <= lastResolutionTimestampRef.current) return
     lastResolutionTimestampRef.current = resolution.timestamp
+    
+    // Mark resolution as showing immediately (synchronous)
+    isResolutionShowingRef.current = true
     
     // Determine winner relative to local perspective
     const isOnlineGuest = state.gameMode === 'online' && state.localPlayer === 2
@@ -167,68 +175,70 @@ export function GameBoard() {
       bonusHealing: resolution.bonusHealing,
     })
     
+    // Store HP targets for animation during overlay
+    const targetP1 = state.player1.hp
+    const targetP2 = state.player2.hp
+    
+    // Start HP animation 1.5 seconds into the overlay (while it's still showing)
+    const hpAnimationTimeoutId = setTimeout(() => {
+      if (targetP1 !== player1DisplayHP) {
+        animateHP(1, player1DisplayHP, targetP1)
+      }
+      if (targetP2 !== player2DisplayHP) {
+        animateHP(2, player2DisplayHP, targetP2)
+      }
+    }, 1500)
+    
     // Clear animation after 3.5 seconds (extra second to show bonus effects)
-    const timeoutId = setTimeout(() => {
+    const overlayTimeoutId = setTimeout(() => {
+      isResolutionShowingRef.current = false
       setResolutionAnimation(null)
     }, 3500)
     
-    return () => clearTimeout(timeoutId)
+    return () => {
+      clearTimeout(hpAnimationTimeoutId)
+      clearTimeout(overlayTimeoutId)
+    }
   }, [state.lastLaneResolution, state.gameMode, state.localPlayer, state.currentPlayer])
-
-  // Animate HP changes with damage flash effect
-  // When HP changes during resolution overlay, store as pending instead of animating immediately
+  
+  // Handle HP changes that happen OUTSIDE of lane resolution (e.g., support ability, discard damage)
+  // These should animate immediately
   useEffect(() => {
+    // Skip if resolution overlay is showing - that's handled separately
+    if (isResolutionShowingRef.current || resolutionAnimation) return
+    
     const p1Changed = state.player1.hp !== player1DisplayHP
     const p2Changed = state.player2.hp !== player2DisplayHP
     
     if (!p1Changed && !p2Changed) return
     
-    // If resolution animation is showing, delay the HP animation
-    if (resolutionAnimation) {
-      setPendingHP({ p1: state.player1.hp, p2: state.player2.hp })
-      return
-    }
-    
-    // No overlay - animate immediately
-    if (state.player1.hp < player1DisplayHP) {
+    // No overlay - animate immediately (for support ability, self-damage from discard, etc.)
+    if (p1Changed) {
       animateHP(1, player1DisplayHP, state.player1.hp)
-    } else if (p1Changed) {
-      setPlayer1DisplayHP(state.player1.hp)
     }
     
-    if (state.player2.hp < player2DisplayHP) {
+    if (p2Changed) {
       animateHP(2, player2DisplayHP, state.player2.hp)
-    } else if (p2Changed) {
-      setPlayer2DisplayHP(state.player2.hp)
     }
   }, [state.player1.hp, state.player2.hp])
   
-  // When resolution overlay closes, trigger pending HP animation
-  useEffect(() => {
-    if (resolutionAnimation === null && pendingHP) {
-      // Overlay just closed - now animate the HP change
-      if (pendingHP.p1 < player1DisplayHP) {
-        animateHP(1, player1DisplayHP, pendingHP.p1)
-      } else if (pendingHP.p1 !== player1DisplayHP) {
-        setPlayer1DisplayHP(pendingHP.p1)
-      }
-      
-      if (pendingHP.p2 < player2DisplayHP) {
-        animateHP(2, player2DisplayHP, pendingHP.p2)
-      } else if (pendingHP.p2 !== player2DisplayHP) {
-        setPlayer2DisplayHP(pendingHP.p2)
-      }
-      
-      setPendingHP(null)
-    }
-  }, [resolutionAnimation, pendingHP])
-  
-  // Helper function to animate HP decrease with flash effect
+  // Helper function to animate HP change (both damage and healing) with flash effect
   const animateHP = (player: 1 | 2, startHP: number, targetHP: number) => {
+    const isHealing = targetHP > startHP
+    
+    // Set the appropriate animation state
     if (player === 1) {
-      setPlayer1TakingDamage(true)
+      if (isHealing) {
+        setPlayer1Healing(true)
+      } else {
+        setPlayer1TakingDamage(true)
+      }
     } else {
-      setPlayer2TakingDamage(true)
+      if (isHealing) {
+        setPlayer2Healing(true)
+      } else {
+        setPlayer2TakingDamage(true)
+      }
     }
     
     const duration = 2000
@@ -237,7 +247,8 @@ export function GameBoard() {
     const animate = () => {
       const elapsed = Date.now() - startTime
       const progress = Math.min(elapsed / duration, 1)
-      const currentHP = Math.round(startHP - (startHP - targetHP) * progress)
+      // Works for both increase and decrease
+      const currentHP = Math.round(startHP + (targetHP - startHP) * progress)
       
       if (player === 1) {
         setPlayer1DisplayHP(currentHP)
@@ -248,10 +259,13 @@ export function GameBoard() {
       if (progress < 1) {
         requestAnimationFrame(animate)
       } else {
+        // Clear the animation state
         if (player === 1) {
           setPlayer1TakingDamage(false)
+          setPlayer1Healing(false)
         } else {
           setPlayer2TakingDamage(false)
+          setPlayer2Healing(false)
         }
       }
     }
@@ -327,32 +341,36 @@ export function GameBoard() {
     aiExecutingRef.current = true
     setIsAIThinking(true)
     
-    // Check if AI should use support ability (use it at start of turn if available)
-    if (state.player2SupportAvailable) {
-      // Show glow effect for 1.5 seconds before using
-      setAISupportGlowing(true)
-      await new Promise(r => setTimeout(r, 1500))
-      dispatch({ type: 'USE_SUPPORT', player: 2 })
-      setAISupportGlowing(false)
-      await new Promise(r => setTimeout(r, 500))
-    }
-    
-    await new Promise(r => setTimeout(r, 800))
-    const moves = executeAITurn(state)
-    
-    for (const move of moves) {
-      await new Promise(r => setTimeout(r, 400))
-      if (move.type === 'lane' && move.laneId) {
-        dispatch({ type: 'PLAY_CARD_TO_LANE', cardId: move.cardId, laneId: move.laneId })
-      } else {
-        dispatch({ type: 'DISCARD_CARD', cardId: move.cardId })
+    try {
+      // Check if AI should use support ability (use it at start of turn if available)
+      if (state.player2SupportAvailable) {
+        // Show glow effect for 1.5 seconds before using
+        setAISupportGlowing(true)
+        await new Promise(r => setTimeout(r, 1500))
+        dispatch({ type: 'USE_SUPPORT', player: 2 })
+        setAISupportGlowing(false)
+        await new Promise(r => setTimeout(r, 500))
       }
+      
+      await new Promise(r => setTimeout(r, 800))
+      const moves = executeAITurn(state)
+      
+      for (const move of moves) {
+        await new Promise(r => setTimeout(r, 400))
+        if (move.type === 'lane' && move.laneId) {
+          dispatch({ type: 'PLAY_CARD_TO_LANE', cardId: move.cardId, laneId: move.laneId })
+        } else {
+          dispatch({ type: 'DISCARD_CARD', cardId: move.cardId })
+        }
+      }
+      
+      await new Promise(r => setTimeout(r, 300))
+      dispatch({ type: 'END_TURN' })
+    } finally {
+      // Always reset flags, even if there was an error
+      setIsAIThinking(false)
+      aiExecutingRef.current = false
     }
-    
-    await new Promise(r => setTimeout(r, 300))
-    dispatch({ type: 'END_TURN' })
-    setIsAIThinking(false)
-    aiExecutingRef.current = false
   }, [state])
 
   // Trigger AI turn (only in vs-ai mode)
@@ -597,11 +615,10 @@ export function GameBoard() {
     setShowDragGhost(true)  // Show our custom ghost for PC too
     draggingCardRef.current = { card, ownerSuit }
     
-    // Set initial ghost position
+    // Set initial ghost position using transform (GPU-accelerated)
     requestAnimationFrame(() => {
       if (dragGhostRef.current) {
-        dragGhostRef.current.style.left = `${e.clientX}px`
-        dragGhostRef.current.style.top = `${e.clientY}px`
+        dragGhostRef.current.style.transform = `translate3d(${e.clientX}px, ${e.clientY}px, 0) scale(1.1) rotate(-5deg)`
       }
     })
   }
@@ -610,14 +627,32 @@ export function GameBoard() {
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()  // Required to allow drop
     if (draggingCardId && dragGhostRef.current) {
-      dragGhostRef.current.style.left = `${e.clientX}px`
-      dragGhostRef.current.style.top = `${e.clientY}px`
+      // Use transform for GPU-accelerated movement
+      dragGhostRef.current.style.transform = `translate3d(${e.clientX}px, ${e.clientY}px, 0) scale(1.1) rotate(-5deg)`
     }
   }
 
+  // Helper to update drag-over lane without causing re-renders
+  const setDragOverLane = (laneId: LaneId | null) => {
+    // Remove old highlight
+    if (dragOverLaneIdRef.current && dragOverLaneIdRef.current !== laneId) {
+      document.querySelector(`[data-lane-id="${dragOverLaneIdRef.current}"]`)?.classList.remove('lane-drag-over')
+    }
+    // Add new highlight
+    if (laneId) {
+      document.querySelector(`[data-lane-id="${laneId}"]`)?.classList.add('lane-drag-over')
+    }
+    dragOverLaneIdRef.current = laneId
+  }
+
   const handleDragEnd = () => {
+    // Cancel any pending animation frame
+    if (dragRAFRef.current) {
+      cancelAnimationFrame(dragRAFRef.current)
+      dragRAFRef.current = null
+    }
     setDraggingCardId(null)
-    setDragOverLaneId(null)
+    setDragOverLane(null)
     setShowDragGhost(false)
     draggingCardRef.current = null
   }
@@ -625,12 +660,12 @@ export function GameBoard() {
   const handleDragOverLane = (e: React.DragEvent, laneId: LaneId) => {
     e.preventDefault()
     if (draggingCardId && canPlayCardToLane(state, draggingCardId, laneId)) {
-      setDragOverLaneId(laneId)
+      setDragOverLane(laneId)
     }
   }
 
   const handleDragLeaveLane = () => {
-    setDragOverLaneId(null)
+    setDragOverLane(null)
   }
 
   const handleDropOnLane = (laneId: LaneId) => {
@@ -667,11 +702,10 @@ export function GameBoard() {
     setShowDragGhost(true)  // Show the custom drag ghost
     draggingCardRef.current = { card, ownerSuit }
     
-    // Set initial position via ref after render
+    // Set initial position via ref after render using transform (GPU-accelerated)
     requestAnimationFrame(() => {
       if (dragGhostRef.current) {
-        dragGhostRef.current.style.left = `${touch.clientX}px`
-        dragGhostRef.current.style.top = `${touch.clientY}px`
+        dragGhostRef.current.style.transform = `translate3d(${touch.clientX}px, ${touch.clientY}px, 0) scale(1.1) rotate(-5deg)`
       }
     })
   }
@@ -681,23 +715,30 @@ export function GameBoard() {
     e.preventDefault()
     
     const touch = e.touches[0]
+    const clientX = touch.clientX
+    const clientY = touch.clientY
     
-    // Update ghost position directly via DOM ref - no state update, no re-render
-    if (dragGhostRef.current) {
-      dragGhostRef.current.style.left = `${touch.clientX}px`
-      dragGhostRef.current.style.top = `${touch.clientY}px`
+    // Throttle updates using requestAnimationFrame to prevent screen tearing
+    if (dragRAFRef.current) {
+      cancelAnimationFrame(dragRAFRef.current)
     }
     
-    // Check what's under the touch point (hide ghost briefly to detect element underneath)
-    if (dragGhostRef.current) {
-      dragGhostRef.current.style.pointerEvents = 'none'
-    }
-    const laneId = getLaneUnderPoint(touch.clientX, touch.clientY)
-    if (laneId && canPlayCardToLane(state, draggingCardId, laneId)) {
-      setDragOverLaneId(laneId)
-    } else {
-      setDragOverLaneId(null)
-    }
+    dragRAFRef.current = requestAnimationFrame(() => {
+      // Update ghost position using transform (GPU-accelerated, no layout thrashing)
+      if (dragGhostRef.current) {
+        dragGhostRef.current.style.transform = `translate3d(${clientX}px, ${clientY}px, 0) scale(1.1) rotate(-5deg)`
+      }
+      
+      // Check what's under the touch point - use helper to avoid re-renders
+      const laneId = getLaneUnderPoint(clientX, clientY)
+      if (laneId && canPlayCardToLane(state, draggingCardId!, laneId)) {
+        setDragOverLane(laneId)
+      } else {
+        setDragOverLane(null)
+      }
+      
+      dragRAFRef.current = null
+    })
   }
 
   const handleTouchEnd = (e: React.TouchEvent) => {
@@ -741,8 +782,8 @@ export function GameBoard() {
         : 'lane-glow-danger'
       : ''
     
-    // Determine if this lane is being dragged over
-    const isDragOver = dragOverLaneId === lane.id && dropTarget
+    // Note: drag-over visual is now handled via direct DOM class manipulation
+    // to avoid re-renders during drag operations
     
     // Perspective flip for online AND hotseat mode
     const isOnlineGuest = state.gameMode === 'online' && state.localPlayer === 2
@@ -772,7 +813,7 @@ export function GameBoard() {
         </div>
         
         <div 
-          className={`lane ${targetable ? 'lane-targetable' : ''} ${dropTarget ? 'lane-drop-target' : ''} ${isDragOver ? 'lane-drag-over' : ''} ${glowClass}`}
+          className={`lane ${targetable ? 'lane-targetable' : ''} ${dropTarget ? 'lane-drop-target' : ''} ${glowClass}`}
         onClick={() => targetable && handleLaneClick(lane.id)}
           data-lane-id={lane.id}
           onDragOver={(e) => handleDragOverLane(e, lane.id)}
@@ -844,8 +885,8 @@ export function GameBoard() {
   }
 
   // Avatar component with pentagonal frame
-  const Avatar = ({ suit, isPlayer, takingDamage = false }: { suit: StandardSuit | null; isPlayer: boolean; takingDamage?: boolean }) => (
-    <div className={`avatar-frame ${isPlayer ? 'player' : 'opponent'} ${takingDamage ? 'taking-damage' : ''}`}>
+  const Avatar = ({ suit, isPlayer, takingDamage = false, healing = false }: { suit: StandardSuit | null; isPlayer: boolean; takingDamage?: boolean; healing?: boolean }) => (
+    <div className={`avatar-frame ${isPlayer ? 'player' : 'opponent'} ${takingDamage ? 'taking-damage' : ''} ${healing ? 'healing' : ''}`}>
       <img src={getAvatarPath(suit)} alt={isPlayer ? 'Player avatar' : 'AI avatar'} />
     </div>
   )
@@ -1365,6 +1406,7 @@ export function GameBoard() {
           const opponentSupportAvailable = shouldFlipPerspective ? state.player1SupportAvailable : state.player2SupportAvailable
           const opponentDisplayHP = shouldFlipPerspective ? player1DisplayHP : player2DisplayHP
           const opponentTakingDamage = shouldFlipPerspective ? player1TakingDamage : player2TakingDamage
+          const opponentHealing = shouldFlipPerspective ? player1Healing : player2Healing
           
           return (
             <>
@@ -1385,7 +1427,7 @@ export function GameBoard() {
               {/* Opponent Avatar area with HP */}
               <div className="hero-float opponent">
                 <HPDisplay hp={opponentDisplayHP} isPlayer={false} />
-                <Avatar suit={opponentSuit} isPlayer={false} takingDamage={opponentTakingDamage} />
+                <Avatar suit={opponentSuit} isPlayer={false} takingDamage={opponentTakingDamage} healing={opponentHealing} />
                 <SupportIcon 
                   suit={opponentSuit} 
                   isPlayer={false} 
@@ -1516,12 +1558,13 @@ export function GameBoard() {
           const localSupportAvailable = shouldFlipPerspective ? state.player2SupportAvailable : state.player1SupportAvailable
           const localDisplayHP = shouldFlipPerspective ? player2DisplayHP : player1DisplayHP
           const localTakingDamage = shouldFlipPerspective ? player2TakingDamage : player1TakingDamage
+          const localHealing = shouldFlipPerspective ? player2Healing : player1Healing
           
           return (
             <>
               <div className="hero-float player">
                 <HPDisplay hp={localDisplayHP} isPlayer={true} />
-                <Avatar suit={localSuit} isPlayer={true} takingDamage={localTakingDamage} />
+                <Avatar suit={localSuit} isPlayer={true} takingDamage={localTakingDamage} healing={localHealing} />
                 <SupportIcon 
                   suit={localSuit} 
                   isPlayer={true} 

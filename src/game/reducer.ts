@@ -3,7 +3,7 @@
  */
 
 import type { Card, CurrentPlayer, FlipResult, GameMode, GameState, Lane, LaneId, PendingLaneResolution, PlayerState, StandardSuit } from './types';
-import { cardValue, createDeck, findCardById, removeCardById, shuffle } from './deck';
+import { cardValue, createDeck, findCardById, isJoker, removeCardById, shuffle } from './deck';
 import { calculateLaneTotal } from './poker';
 import { applyDamage, createEmptyLanes, drawCards, findLane, initializeNewGame, startNewRound, updateLane } from './state';
 import { applyWinnerDamageBonus, calculateLaneSuitEffects } from './suitEffects';
@@ -313,9 +313,16 @@ function handlePlayCardToLane(state: GameState, cardId: string, laneId: LaneId):
   const playerSide = state.currentPlayer === 1 ? lane.player1 : lane.player2;
   if (playerSide.cards.length >= MAX_CARDS_PER_LANE) return state;
 
+  // Joker-aware card play check: only non-joker cards restrict what can be played
   if (playerSide.cards.length > 0) {
-    const lastCard = playerSide.cards[playerSide.cards.length - 1];
-    if (cardValue(card) < cardValue(lastCard)) return state;
+    let lastNonJokerValue = 0;
+    for (const c of playerSide.cards) {
+      if (!isJoker(c)) {
+        lastNonJokerValue = cardValue(c);
+      }
+    }
+    // Only restrict if there's a non-joker card; jokers don't block plays
+    if (lastNonJokerValue > 0 && cardValue(card) < lastNonJokerValue) return state;
   }
 
   const newHand = removeCardById(currentPlayerState.hand, cardId);
@@ -756,8 +763,17 @@ export function canPlayCardToLane(state: GameState, cardId: string, laneId: Lane
   const playerSide = state.currentPlayer === 1 ? lane.player1 : lane.player2;
   if (playerSide.cards.length >= MAX_CARDS_PER_LANE) return false;
   if (playerSide.cards.length > 0) {
-    const lastCard = playerSide.cards[playerSide.cards.length - 1];
-    if (cardValue(card) < cardValue(lastCard)) return false;
+    // Find the last non-joker card's value - jokers don't restrict what can be played on top
+    // New cards must be >= the most recent non-joker card's value
+    let lastNonJokerValue = 0;
+    for (const c of playerSide.cards) {
+      if (!isJoker(c)) {
+        lastNonJokerValue = cardValue(c);
+      }
+    }
+    // If there's a non-joker somewhere, new card must be >= its value
+    if (lastNonJokerValue > 0 && cardValue(card) < lastNonJokerValue) return false;
+    // If only jokers in lane, any card can be played
   }
   return true;
 }
