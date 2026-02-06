@@ -44,7 +44,7 @@ export type GameAction =
   | { type: 'CONTINUE_FROM_FLIP' }
   | { type: 'PLAY_CARD_TO_LANE'; cardId: string; laneId: LaneId }
   | { type: 'DISCARD_CARD'; cardId: string }
-  | { type: 'END_TURN' }
+  | { type: 'END_TURN'; fromNetwork?: boolean }  // fromNetwork skips validation for remote actions
   | { type: 'RESOLVE_LANE'; laneId: LaneId }
   | { type: 'RESOLVE_END_OF_ROUND' }
   | { type: 'SUDDEN_DEATH_STEP' }
@@ -90,7 +90,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     case 'CONTINUE_FROM_FLIP': return handleContinueFromFlip(state);
     case 'PLAY_CARD_TO_LANE': return handlePlayCardToLane(state, action.cardId, action.laneId);
     case 'DISCARD_CARD': return handleDiscardCard(state, action.cardId);
-    case 'END_TURN': return handleEndTurn(state);
+    case 'END_TURN': return handleEndTurn(state, action.fromNetwork);
     case 'RESOLVE_LANE': return resolveLane(state, action.laneId);
     case 'RESOLVE_END_OF_ROUND': return handleResolveEndOfRound(state);
     case 'SUDDEN_DEATH_STEP': return handleSuddenDeathStep(state);
@@ -555,19 +555,25 @@ function processPendingLanesForPlayer(state: GameState, player: CurrentPlayer): 
   return newState;
 }
 
-function handleEndTurn(state: GameState): GameState {
+function handleEndTurn(state: GameState, fromNetwork?: boolean): GameState {
   if (state.phase !== 'Main') return state;
   
   const currentPlayer = state.currentPlayer;
   const currentPlayerState = currentPlayer === 1 ? state.player1 : state.player2;
   
-  // Can end turn if: played 3 cards OR (played at least 1 card AND hand is empty)
-  const handIsEmpty = currentPlayerState.hand.length === 0;
-  const played3Cards = state.cardsPlayedThisTurn >= CARDS_PER_TURN;
-  const playedAtLeast1 = state.cardsPlayedThisTurn >= 1;
-  
-  if (!played3Cards && !(playedAtLeast1 && handIsEmpty)) {
-    return state; // Can't end turn yet
+  // Skip validation for network actions - they've already been validated by the sender
+  // This prevents desync issues where local cardsPlayedThisTurn doesn't match remote
+  if (!fromNetwork) {
+    // Can end turn if: played 3 cards OR (played at least 1 card AND hand is empty)
+    const handIsEmpty = currentPlayerState.hand.length === 0;
+    const played3Cards = state.cardsPlayedThisTurn >= CARDS_PER_TURN;
+    const playedAtLeast1 = state.cardsPlayedThisTurn >= 1;
+    
+    if (!played3Cards && !(playedAtLeast1 && handIsEmpty)) {
+      return state; // Can't end turn yet
+    }
+  } else {
+    console.log(`[Network] Processing END_TURN from network - skipping validation`);
   }
 
   let player1 = { ...state.player1 };

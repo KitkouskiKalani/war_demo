@@ -555,12 +555,13 @@ export function GameBoard() {
     
     // Handle incoming game actions from opponent
     if (action.type === 'GAME_ACTION') {
-      dispatch(action.action)
-      
-      // Show "Your Turn" popup when opponent ends turn
+      // For END_TURN, add fromNetwork flag to skip validation (already validated by sender)
       if (action.action.type === 'END_TURN') {
+        dispatch({ ...action.action, fromNetwork: true })
         setShowYourTurn(true)
         setTimeout(() => setShowYourTurn(false), 1500)
+      } else {
+        dispatch(action.action)
       }
     }
     
