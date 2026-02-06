@@ -227,6 +227,16 @@ export function calculateLaneTotal(cards: Card[]): number {
 }
 
 /**
+ * Calculate total lane value with a multiplier on the poker bonus.
+ * Used by Clubs Jack to double the poker bonus (multiplier = 2).
+ * Returns: baseSum + (pokerBonus * multiplier)
+ */
+export function calculateLaneTotalWithBonusMultiplier(cards: Card[], bonusMultiplier: number): number {
+  const resolution = resolveJokersOptimally(cards);
+  return resolution.totalValue + (resolution.bonus * bonusMultiplier);
+}
+
+/**
  * Get what a Joker resolves to in a given lane context.
  * Used for tooltips to show "Mimicking a X of Y".
  */

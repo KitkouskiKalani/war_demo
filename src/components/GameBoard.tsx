@@ -8,11 +8,12 @@
  */
 
 import { useReducer, useEffect, useState, useCallback, useRef } from 'react'
-import { gameReducer, canPlayCardToLane, canEndTurn, executeAITurn } from '../game'
+import { gameReducer, canPlayCardToLane, canEndTurn, executeAITurn, getAIEffectChoice } from '../game'
 import { initializeNewGame } from '../game/state'
 import { calculateBaseSum, evaluateLaneBonus } from '../game/poker'
 import type { LaneId, Lane, StandardSuit, GameMode, CurrentPlayer } from '../game/types'
 import { CardView } from './CardView'
+import { EffectChoiceModal, StatusIndicators, ChargesDisplay } from './EffectChoiceModal'
 import * as Network from '../network/peer'
 import * as Lobbies from '../network/supabase'
 import type { Lobby } from '../network/supabase'
@@ -93,6 +94,13 @@ export function GameBoard() {
   const dragGhostRef = useRef<HTMLDivElement | null>(null)
   const dragRAFRef = useRef<number | null>(null)  // For throttling touch move updates
   
+  // Board selection mode for Clubs effects
+  // 'move-source': Selecting which lane to pick the top card from
+  // 'move-target': Selecting which lane to move the card to (after source selected)
+  // 'neutralize': Selecting which lane to neutralize
+  const [boardSelectionMode, setBoardSelectionMode] = useState<'move-source' | 'move-target' | 'neutralize' | null>(null)
+  const [moveSourceLane, setMoveSourceLane] = useState<LaneId | null>(null)
+  
   // Online multiplayer state
   const [joinRoomCode, setJoinRoomCode] = useState('')
   const [connectionError, setConnectionError] = useState<string | null>(null)
@@ -127,6 +135,141 @@ export function GameBoard() {
       const action = { type: 'USE_SUPPORT' as const, player: playerNum }
       dispatch(action)
       sendNetworkAction(action)
+    }
+  }
+
+  // v2 Effect Choice Handlers
+  const handleClubsReplace = (handCardId: string, replacementRank: 'J' | 'Q' | 'K') => {
+    const action = { type: 'EFFECT_CHOICE_CLUBS_REPLACE' as const, handCardId, replacementRank }
+    dispatch(action)
+    sendNetworkAction(action)
+  }
+
+  const handleClubsMove = (cardId: string, fromLane: LaneId, toLane: LaneId) => {
+    const action = { type: 'EFFECT_CHOICE_CLUBS_MOVE' as const, cardId, fromLane, toLane }
+    dispatch(action)
+    sendNetworkAction(action)
+  }
+
+  const handleClubsNeutralize = (laneId: LaneId) => {
+    const action = { type: 'EFFECT_CHOICE_CLUBS_NEUTRALIZE' as const, laneId }
+    dispatch(action)
+    sendNetworkAction(action)
+  }
+
+  const handleClubsQueenDelay = (targetLaneId: LaneId) => {
+    const action = { type: 'EFFECT_CHOICE_CLUBS_QUEEN_DELAY' as const, targetLaneId }
+    dispatch(action)
+    sendNetworkAction(action)
+  }
+
+  const handleDiamondsAce = (choice: 'charges' | 'chargePower') => {
+    const action = { type: 'EFFECT_CHOICE_DIAMONDS_ACE' as const, choice }
+    dispatch(action)
+    sendNetworkAction(action)
+  }
+
+  const handleDiamondsQueen = (choice: 'damage' | 'heal') => {
+    const action = { type: 'EFFECT_CHOICE_DIAMONDS_QUEEN' as const, choice }
+    dispatch(action)
+    sendNetworkAction(action)
+  }
+
+  // v2.2 new handlers
+  const handleHeartsAce = (choice: 'regen' | 'regenEffect') => {
+    const action = { type: 'EFFECT_CHOICE_HEARTS_ACE' as const, choice }
+    dispatch(action)
+    sendNetworkAction(action)
+  }
+
+  const handleSpadesAce = (choice: 'bloodDebt' | 'bleed') => {
+    const action = { type: 'EFFECT_CHOICE_SPADES_ACE' as const, choice }
+    dispatch(action)
+    sendNetworkAction(action)
+  }
+
+  const handleClubsMidReplace = (handCardId: string) => {
+    const action = { type: 'EFFECT_CHOICE_CLUBS_MID_REPLACE' as const, handCardId }
+    dispatch(action)
+    sendNetworkAction(action)
+  }
+
+  const handleSpendCharge = (choice: 'damage' | 'heal') => {
+    const action = { type: 'SPEND_DIAMOND_CHARGE' as const, choice }
+    dispatch(action)
+    sendNetworkAction(action)
+  }
+
+  const handleDismissEffectChoice = () => {
+    const action = { type: 'DISMISS_EFFECT_CHOICE' as const }
+    dispatch(action)
+    sendNetworkAction(action)
+    // Also clear any board selection mode
+    setBoardSelectionMode(null)
+    setMoveSourceLane(null)
+  }
+
+  // Enter board selection modes for Clubs effects
+  const handleEnterMoveMode = () => {
+    setBoardSelectionMode('move-source')
+  }
+  
+  const handleEnterNeutralizeMode = () => {
+    setBoardSelectionMode('neutralize')
+  }
+  
+  // Handle board selection clicks
+  const handleBoardSelectionClick = (laneId: LaneId) => {
+    if (boardSelectionMode === 'neutralize') {
+      // Neutralize this lane
+      if (!state.neutralizedLanes[laneId]) {
+        handleClubsNeutralize(laneId)
+      }
+      setBoardSelectionMode(null)
+      return
+    }
+    
+    if (boardSelectionMode === 'move-source') {
+      // Get opponent's side in this lane
+      const choice = state.pendingEffectChoices[0]
+      if (!choice) return
+      
+      const opponent = choice.player === 1 ? 2 : 1
+      const lane = state.lanes.find(l => l.id === laneId)
+      if (!lane) return
+      
+      const opponentCards = opponent === 1 ? lane.player1.cards : lane.player2.cards
+      if (opponentCards.length === 0) return
+      
+      // Store the source lane and move to target selection
+      setMoveSourceLane(laneId)
+      setBoardSelectionMode('move-target')
+      return
+    }
+    
+    if (boardSelectionMode === 'move-target' && moveSourceLane) {
+      // Can't move to same lane
+      if (laneId === moveSourceLane) return
+      
+      // Get the top card from source lane
+      const choice = state.pendingEffectChoices[0]
+      if (!choice) return
+      
+      const opponent = choice.player === 1 ? 2 : 1
+      const sourceLane = state.lanes.find(l => l.id === moveSourceLane)
+      if (!sourceLane) return
+      
+      const opponentCards = opponent === 1 ? sourceLane.player1.cards : sourceLane.player2.cards
+      if (opponentCards.length === 0) return
+      
+      // Get the top card (last in the array)
+      const topCard = opponentCards[opponentCards.length - 1]
+      
+      // Execute the move
+      handleClubsMove(topCard.id, moveSourceLane, laneId)
+      setBoardSelectionMode(null)
+      setMoveSourceLane(null)
+      return
     }
   }
 
@@ -380,6 +523,25 @@ export function GameBoard() {
     }
   }, [state.gameMode, state.phase, state.currentPlayer, isAIThinking, executeAI])
 
+  // v2: Handle AI effect choices automatically
+  useEffect(() => {
+    if (state.gameMode !== 'vs-ai') return
+    if (state.pendingEffectChoices.length === 0) return
+    
+    const choice = state.pendingEffectChoices[0]
+    if (choice.player !== 2) return // Only handle AI's choices
+    
+    // Small delay before AI makes choice
+    const timeoutId = setTimeout(() => {
+      const aiAction = getAIEffectChoice(state)
+      if (aiAction) {
+        dispatch(aiAction)
+      }
+    }, 500)
+    
+    return () => clearTimeout(timeoutId)
+  }, [state.gameMode, state.pendingEffectChoices])
+
   // Auto-resolve end of round
   useEffect(() => {
     if (state.phase === 'EndOfRoundResolving') {
@@ -440,6 +602,10 @@ export function GameBoard() {
   const handleCreateRoom = async () => {
     setIsConnecting(true)
     setConnectionError(null)
+    
+    // Force cleanup any stale connections before creating
+    Network.forceCleanup()
+    
     try {
       const code = await Network.createRoom()
       dispatch({ type: 'SET_ROOM_CODE', code })
@@ -463,7 +629,7 @@ export function GameBoard() {
       })
     } catch (err: any) {
       setConnectionError(err.message || 'Failed to create room. Please try again.')
-      console.error(err)
+      console.error('[Network] Create room error:', err)
     }
     setIsConnecting(false)
   }
@@ -476,13 +642,17 @@ export function GameBoard() {
     }
     setIsConnecting(true)
     setConnectionError(null)
+    
+    // Force cleanup any stale connections before joining
+    Network.forceCleanup()
+    
     try {
       await Network.joinRoom(roomCode.toUpperCase())
       dispatch({ type: 'SET_ROOM_CODE', code: roomCode.toUpperCase() })
       // Guest is player 2, transition handled by state sync from host
     } catch (err: any) {
       setConnectionError(err.message || 'Failed to join room. Check the code and try again.')
-      console.error(err)
+      console.error('[Network] Join room error:', err)
     }
     setIsConnecting(false)
   }
@@ -548,6 +718,13 @@ export function GameBoard() {
   }
 
   const handleLaneClick = (laneId: LaneId) => {
+    // Check if in board selection mode (for Clubs effects)
+    if (boardSelectionMode) {
+      handleBoardSelectionClick(laneId)
+      return
+    }
+    
+    // Normal card play logic
     if (!selectedCardId || !canAct) return
     if (!canPlayCardToLane(state, selectedCardId, laneId)) return
     const action = { type: 'PLAY_CARD_TO_LANE' as const, cardId: selectedCardId, laneId }
@@ -782,6 +959,32 @@ export function GameBoard() {
         : 'lane-glow-danger'
       : ''
     
+    // Board selection mode classes
+    const isMoveSource = moveSourceLane === lane.id
+    const isNeutralized = state.neutralizedLanes[lane.id]
+    
+    // Determine if lane is selectable in current board selection mode
+    let selectionSelectable = false
+    let selectionClass = ''
+    if (boardSelectionMode === 'neutralize' && !isNeutralized) {
+      selectionSelectable = true
+      selectionClass = 'lane-selection-neutralize'
+    } else if (boardSelectionMode === 'move-source') {
+      // Check if opponent has cards in this lane
+      const choice = state.pendingEffectChoices[0]
+      if (choice) {
+        const opponent = choice.player === 1 ? 2 : 1
+        const opponentCards = opponent === 1 ? lane.player1.cards : lane.player2.cards
+        if (opponentCards.length > 0) {
+          selectionSelectable = true
+          selectionClass = 'lane-selection-move-source'
+        }
+      }
+    } else if (boardSelectionMode === 'move-target' && !isMoveSource) {
+      selectionSelectable = true
+      selectionClass = 'lane-selection-move-target'
+    }
+    
     // Note: drag-over visual is now handled via direct DOM class manipulation
     // to avoid re-renders during drag operations
     
@@ -813,12 +1016,19 @@ export function GameBoard() {
         </div>
         
         <div 
-          className={`lane ${targetable ? 'lane-targetable' : ''} ${dropTarget ? 'lane-drop-target' : ''} ${glowClass}`}
-        onClick={() => targetable && handleLaneClick(lane.id)}
+          className={`lane ${targetable ? 'lane-targetable' : ''} ${dropTarget ? 'lane-drop-target' : ''} ${glowClass} ${selectionClass} ${isMoveSource ? 'lane-move-source' : ''}`}
+          onClick={() => {
+            if (selectionSelectable) {
+              handleLaneClick(lane.id)
+            } else if (targetable) {
+              handleLaneClick(lane.id)
+            }
+          }}
           data-lane-id={lane.id}
           onDragOver={(e) => handleDragOverLane(e, lane.id)}
           onDragLeave={handleDragLeaveLane}
           onDrop={() => handleDropOnLane(lane.id)}
+          style={{ cursor: selectionSelectable ? 'pointer' : undefined }}
         >
           {/* Pending resolution indicator */}
           {pendingInfo && (
@@ -827,24 +1037,32 @@ export function GameBoard() {
             </div>
           )}
 
-          {/* Opponent cards (top) - stacked vertically */}
+          {/* Opponent cards (top) - stacked vertically, reversed so first card is closest to center */}
           <div className="lane-cards-stack opponent">
             {topCards.length === 0 ? (
               <div className="lane-empty">—</div>
             ) : (
-              topCards.map((card, idx) => (
-                <div key={card.id} className="stacked-card" style={{ zIndex: idx }}>
-                  <CardView 
-                    card={card} 
-                    small 
-                    ownerSuit={topSuit}
-                    laneCards={topCards}
-                    cardIndexInLane={idx}
-                  />
-                </div>
-            ))
-          )}
-        </div>
+              [...topCards].reverse().map((card, renderIdx) => {
+                // Original index in the array (for lane context)
+                const originalIdx = topCards.length - 1 - renderIdx
+                // z-index: first played card (closest to center) should be on TOP visually
+                // renderIdx 0 = last played (furthest from center) = lowest z-index
+                // renderIdx 2 = first played (closest to center) = highest z-index
+                const zIndex = renderIdx + 1
+                return (
+                  <div key={card.id} className="stacked-card" style={{ zIndex }}>
+                    <CardView 
+                      card={card} 
+                      small 
+                      ownerSuit={topSuit}
+                      laneCards={topCards}
+                      cardIndexInLane={originalIdx}
+                    />
+                  </div>
+                )
+              })
+            )}
+          </div>
 
         {/* Lane label */}
         <div className="lane-label">
@@ -1238,7 +1456,7 @@ export function GameBoard() {
 
   // War Flip Result Animation Screen
   if (state.phase === 'InitialFlipResult' && state.flipResult) {
-    const { player1Card, player2Card, winner, damage } = state.flipResult
+    const { player1Card, player2Card, winner } = state.flipResult
     const playerWon = winner === 1
     const isPvP = state.gameMode === 'vs-player'
     const isOnline = state.gameMode === 'online'
@@ -1290,19 +1508,6 @@ export function GameBoard() {
                 : isOnline
                   ? (localWon ? 'YOU WIN THE FLIP!' : 'OPPONENT WINS THE FLIP!')
                   : (playerWon ? 'YOU WIN THE FLIP!' : 'AI WINS THE FLIP!')}
-            </div>
-          )}
-
-          {/* Damage Display */}
-          {flipAnimationStage === 'damage' && damage > 0 && (
-            <div className="flip-damage-display">
-              <span className={localWon ? 'damage-to-ai' : 'damage-to-player'}>
-                -{damage} HP to {isPvP 
-                  ? (playerWon ? 'Player 2' : 'Player 1') 
-                  : isOnline
-                    ? (localWon ? 'Opponent' : 'You')
-                    : (playerWon ? 'AI' : 'You')}
-              </span>
             </div>
           )}
 
@@ -1391,6 +1596,63 @@ export function GameBoard() {
         </div>
       )}
       
+      {/* v2 Effect Choice Modal */}
+      {/* Board Selection Mode Instructions */}
+      {boardSelectionMode && (
+        <div className="board-selection-instructions">
+          <div className="board-selection-text">
+            {boardSelectionMode === 'neutralize' && 'Click a lane to neutralize it'}
+            {boardSelectionMode === 'move-source' && 'Click a lane to pick the top opponent card'}
+            {boardSelectionMode === 'move-target' && 'Click a lane to move the card there'}
+          </div>
+          <button 
+            className="board-selection-cancel"
+            onClick={() => {
+              setBoardSelectionMode(null)
+              setMoveSourceLane(null)
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+      
+      {state.pendingEffectChoices.length > 0 && !boardSelectionMode && (() => {
+        const choice = state.pendingEffectChoices[0]
+        // Only show modal for the player who needs to make the choice
+        const isOnlineGuest = state.gameMode === 'online' && state.localPlayer === 2
+        const isHotseatP2Turn = state.gameMode === 'vs-player' && state.currentPlayer === 2
+        const shouldFlipPerspective = isOnlineGuest || isHotseatP2Turn
+        const localPlayerNum = shouldFlipPerspective ? 2 : 1
+        
+        // In vs-AI mode, AI choices are handled automatically
+        if (state.gameMode === 'vs-ai' && choice.player === 2) {
+          return null // AI will handle this
+        }
+        
+        // Only show modal for the local player's choice
+        if (choice.player !== localPlayerNum && state.gameMode !== 'vs-ai') {
+          return null // Not this player's choice
+        }
+        
+        return (
+          <EffectChoiceModal
+            choice={choice}
+            state={state}
+            onClubsReplace={handleClubsReplace}
+            onClubsMidReplace={handleClubsMidReplace}
+            onEnterMoveMode={handleEnterMoveMode}
+            onEnterNeutralizeMode={handleEnterNeutralizeMode}
+            onClubsQueenDelay={handleClubsQueenDelay}
+            onDiamondsAce={handleDiamondsAce}
+            onDiamondsQueen={handleDiamondsQueen}
+            onHeartsAce={handleHeartsAce}
+            onSpadesAce={handleSpadesAce}
+            onDismiss={handleDismissEffectChoice}
+          />
+        )
+      })()}
+      
       {/* ===== TOP: Opponent Section ===== */}
       <div className="top-section">
         {/* Opponent Hand - perspective flip for online AND hotseat mode */}
@@ -1433,6 +1695,7 @@ export function GameBoard() {
                   isPlayer={false} 
                   available={opponentSupportAvailable || aiSupportGlowing}
                 />
+                <StatusIndicators player={shouldFlipPerspective ? 1 : 2} state={state} />
           </div>
             </>
           )
@@ -1570,6 +1833,13 @@ export function GameBoard() {
                   isPlayer={true} 
                   available={localSupportAvailable}
                   onClick={handlePlayerUseSupport}
+                />
+                <StatusIndicators player={shouldFlipPerspective ? 2 : 1} state={state} />
+                <ChargesDisplay 
+                  player={shouldFlipPerspective ? 2 : 1} 
+                  state={state} 
+                  onSpendCharge={handleSpendCharge}
+                  canSpend={state.phase === 'Main' && isLocalPlayerTurn}
                 />
         </div>
 

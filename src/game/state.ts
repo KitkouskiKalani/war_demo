@@ -17,13 +17,30 @@ export function createEmptyLanes(): Lane[] {
   return LANE_IDS.map(createEmptyLane);
 }
 
+function createInitialPlayerState(deck: Card[]): PlayerState {
+  return {
+    hp: STARTING_HP,
+    deck,
+    hand: [],
+    // v2 Ability System
+    bloodDebtStacks: 0,
+    bleedStacks: [],
+    // v2.2 Hearts Regen System (instance-based, like bleed)
+    regenStacks: [],
+    regenEffectBonus: 0,
+    regenEffectBonusTurnsRemaining: 0,
+    diamondCharges: 0,
+    chargePower: 0
+  };
+}
+
 export function initializeNewGame(): GameState {
   const deck = shuffle(createDeck());
   return {
     phase: 'ModeSelection',
     gameMode: 'vs-ai', // Default, will be set by player
-    player1: { hp: STARTING_HP, deck: deck.slice(0, CARDS_PER_PLAYER), hand: [] },
-    player2: { hp: STARTING_HP, deck: deck.slice(CARDS_PER_PLAYER, CARDS_PER_PLAYER * 2), hand: [] },
+    player1: createInitialPlayerState(deck.slice(0, CARDS_PER_PLAYER)),
+    player2: createInitialPlayerState(deck.slice(CARDS_PER_PLAYER, CARDS_PER_PLAYER * 2)),
     lanes: createEmptyLanes(),
     discardPile: [],
     currentPlayer: 1,
@@ -48,17 +65,52 @@ export function initializeNewGame(): GameState {
     roomCode: null,
     // Lane resolution animation
     lastLaneResolution: null,
+    // v2 Ability System
+    neutralizedLanes: { left: false, middle: false, right: false },
+    pendingEffectChoices: [],
+    overkillThisTurn: 0,
+    laneDelayedUntilTurn: { left: false, middle: false, right: false }
   };
 }
 
 export function startNewRound(prevState: GameState): GameState {
   const allCards = collectAllCards(prevState);
   const shuffledDeck = shuffle(allCards);
+  
+  // Preserve v2 persistent state, clear temporary state
+  const player1NewRound: PlayerState = {
+    hp: prevState.player1.hp,
+    deck: shuffledDeck.slice(0, CARDS_PER_PLAYER),
+    hand: [],
+    // Persistent v2 state - all persist across rounds
+    bloodDebtStacks: prevState.player1.bloodDebtStacks,
+    bleedStacks: prevState.player1.bleedStacks,
+    regenStacks: prevState.player1.regenStacks,  // Array of RegenStack instances
+    regenEffectBonus: prevState.player1.regenEffectBonus,
+    regenEffectBonusTurnsRemaining: prevState.player1.regenEffectBonusTurnsRemaining,
+    diamondCharges: prevState.player1.diamondCharges,
+    chargePower: prevState.player1.chargePower
+  };
+  
+  const player2NewRound: PlayerState = {
+    hp: prevState.player2.hp,
+    deck: shuffledDeck.slice(CARDS_PER_PLAYER, CARDS_PER_PLAYER * 2),
+    hand: [],
+    // Persistent v2 state - all persist across rounds
+    bloodDebtStacks: prevState.player2.bloodDebtStacks,
+    bleedStacks: prevState.player2.bleedStacks,
+    regenStacks: prevState.player2.regenStacks,  // Array of RegenStack instances
+    regenEffectBonus: prevState.player2.regenEffectBonus,
+    regenEffectBonusTurnsRemaining: prevState.player2.regenEffectBonusTurnsRemaining,
+    diamondCharges: prevState.player2.diamondCharges,
+    chargePower: prevState.player2.chargePower
+  };
+  
   return {
     phase: 'InitialFlip',
     gameMode: prevState.gameMode, // Preserve game mode across rounds
-    player1: { hp: prevState.player1.hp, deck: shuffledDeck.slice(0, CARDS_PER_PLAYER), hand: [] },
-    player2: { hp: prevState.player2.hp, deck: shuffledDeck.slice(CARDS_PER_PLAYER, CARDS_PER_PLAYER * 2), hand: [] },
+    player1: player1NewRound,
+    player2: player2NewRound,
     lanes: createEmptyLanes(),
     discardPile: [],
     currentPlayer: 1,
@@ -83,6 +135,11 @@ export function startNewRound(prevState: GameState): GameState {
     roomCode: prevState.roomCode,
     // Lane resolution animation - clear for new round
     lastLaneResolution: null,
+    // v2 Ability System - reset lane neutralization, clear choices
+    neutralizedLanes: { left: false, middle: false, right: false },
+    pendingEffectChoices: [],
+    overkillThisTurn: 0,
+    laneDelayedUntilTurn: { left: false, middle: false, right: false }
   };
 }
 

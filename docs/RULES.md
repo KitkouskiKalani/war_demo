@@ -1,4 +1,4 @@
-# War-Lanes Poker – Game Rules v1.4
+# War-Lanes Poker – Game Rules v2.0
 
 ## Overview
 
@@ -6,6 +6,7 @@ War-Lanes Poker is a 1v1 card game that mixes:
 - War-style damage (difference in card values)
 - Lane-based play (3 lanes per player)
 - Poker-style bonuses on 3-card "hands"
+- **Suit-based abilities** that trigger on play or lane resolution
 
 Each player starts at **100 HP**. The game is played over one or more rounds using a **56-card deck**. Rounds continue until a player's HP drops to 0 or below and a winner is determined.
 
@@ -15,7 +16,7 @@ Each player starts at **100 HP**. The game is played over one or more rounds usi
 
 - Deck: **56 cards**
   - 52 standard playing cards (4 suits, 13 ranks)
-  - **4 Jokers**
+  - **4 Jokers** (one of each suit: Hearts, Diamonds, Clubs, Spades)
 
 - Card values:
   - 2–10 → 2–10
@@ -25,15 +26,14 @@ Each player starts at **100 HP**. The game is played over one or more rounds usi
   - Ace (A) → 14
   - Joker → **15**
 
-- Jokers are **wild** and **position-flexible**:
-  - They can be played at **any position** in a lane (first, second, or third)
-  - They dynamically become the optimal rank/suit for the best poker bonus
-  - **Value Cap Rule**: A Joker's value is capped by the **minimum value of cards played AFTER it**
-    - Example: Joker (first) → Queen (second) → King (third, same suit) = Joker becomes Jack for straight flush (J-Q-K)
-    - Example: Joker (first) → 2 (second) = Joker becomes 2 (pair), max value is now 2
-    - Example: 2 (first) → Joker (second) → 4 (third) = Joker max is 4, becomes 3 for straight (2-3-4)
-  - If a Joker is played **last** (on top), it can be up to value **15** (Ace + 1)
-  - The Joker's **damage value** is its resolved rank, not always 15
+- **Joker Mechanics**:
+  - **Suited**: Each Joker belongs to a specific suit. The Joker matching your chosen suit appears in color (active), others appear grayscale (inactive).
+  - **Wild for Poker**: Jokers dynamically become the optimal rank/suit for the best poker bonus.
+  - **Position-Flexible**: Can be played at any position in a lane.
+  - **Value Cap Rule**: A Joker's resolved value is capped by the minimum value of cards played AFTER it.
+    - Example: Joker → Queen → King (same suit) = Joker becomes Jack for straight flush (J-Q-K)
+    - Example: Joker → 2 = Joker becomes 2 (pair)
+  - **No Suit Abilities**: Jokers never trigger suit effects, even if they match your suit.
 
 ---
 
@@ -71,13 +71,13 @@ At the beginning of each round:
 1. Both players reveal the **top card** of their personal deck.
 2. Compare value:
    - Higher card value wins the flip.
-   - The winner deals **damage equal to the difference in values** to the loser.
    - The winner becomes the **first player** for this round.
+   - **No damage is dealt** from the War flip (v2.0 change).
 3. If the revealed cards are a **tie**:
    - Both players reveal another top card (keeping the previous revealed cards on the table).
    - Repeat until a non-tie reveals a winner.
-   - Damage is based on the final non-tie pair (difference in their values).
 4. All revealed cards from the War flip go into the **shared discard pile**.
+5. The winner's suit becomes the **Field Control suit**, affecting the battlefield appearance.
 
 After the War flip, each player draws **5 cards** from their remaining personal deck into their hand.
 
@@ -89,11 +89,14 @@ The game proceeds in turns, starting with the War flip winner and alternating be
 
 On your turn:
 
-1. You must **play exactly 3 cards from your hand**.
+1. You must **play up to 3 cards from your hand**.
    - Cards can be played:
      - Into one of your 3 lanes (Left, Middle, Right), or
      - Into the shared **discard pile**.
-2. After you have played 3 cards, your turn ends and you perform a draw step.
+2. **Ending your turn:**
+   - Normally, you must play 3 cards before ending your turn.
+   - If your **hand is empty** (because you drew fewer cards near the end of the round), you may end your turn early after playing at least 1 card.
+3. After ending your turn, you perform a draw step.
 
 ### Playing to Lanes
 
@@ -126,20 +129,37 @@ Example:
 
 ## Draw Step & Deck Exhaustion
 
-At the end of your turn, you try to draw **3 cards** from your personal deck:
+Drawing is split between end-of-turn and start-of-turn to allow strategic planning while maintaining reactive gameplay:
 
-- If your deck has **3 or more cards**:
-  - Draw 3 cards into your hand.
-- If your deck has **1 or 2 cards**:
-  - Move those **1 or 2 cards directly into the discard pile** (they are **not** drawn into your hand).
-  - You take **no damage** for this.
-  - Your deck now has 0 cards.
-  - This turn counts as your **final turn** for this round.
-- If your deck already has **0 cards** at the start of your turn:
-  - You still must play 3 cards from your hand (if possible), but you do **not** draw at the end of the turn.
-  - This is also considered a final-turn state.
+### End of Turn Draw (Planning Phase)
+When you end your turn, draw **2 cards** from your deck (if available):
+- This lets you plan your next turn with most of your hand ready
+- If your deck has fewer than 2 cards, draw whatever remains
 
-A round moves toward its end as both players run out of cards in their personal decks.
+### Start of Turn Draw (Reactive Element)
+When your turn begins, draw **1 card** from your deck (if available):
+- This adds an element of adapting on-the-fly
+- You must incorporate this new card into your existing plans
+
+### Deck Exhaustion
+
+- If your deck has **0 cards**: No cards are drawn at that phase
+- Continue playing with whatever cards remain in your hand
+
+### Ending Your Turn
+
+Normally, you must play or discard **3 cards** before ending your turn. However:
+
+- If your **hand becomes empty** before playing 3 cards (because you drew fewer cards), you may end your turn early after playing at least 1 card.
+- This ensures both players can play **all cards** from their decks before the round ends.
+
+### Round Completion
+
+A player's turn is considered their **final turn** when:
+- Their deck is empty, AND
+- Their hand is empty (after playing their cards)
+
+The round ends when **both players have completed their final turns** (both have empty decks AND empty hands). At that point, all remaining lanes are resolved.
 
 ---
 
@@ -224,14 +244,15 @@ Notes:
 
 ## End-of-Round Condition
 
-Each player's personal deck will eventually run out.
+Each player's personal deck will eventually run out. The round ends when **both players have exhausted all their cards**.
 
-- When a player attempts to draw and has **1–2 cards left**:
-  - Those cards go to **discard** with no damage.
-  - That turn is that player's **final turn** for this round.
-- Once **both players have completed a final turn** (i.e., their decks have hit zero and they've had a turn in that 0-deck state), the round ends.
+**A player is finished for the round when:**
+- Their deck is empty, AND
+- Their hand is empty (after playing all remaining cards)
 
-At that point, some lanes may be:
+This ensures both players get to play **every card** in their deck before the round ends. If you draw only 2 cards because that's all that remains, you play those 2 cards (and may end your turn early once your hand is empty).
+
+**Once both players have finished**, the round ends. At that point, some lanes may be:
 
 - Completely filled (3 cards on each side)
 - Partially filled (e.g., 1 or 2 cards on one or both sides)
@@ -297,112 +318,86 @@ If both players' HP are still > 0 and not tied after a round:
 
 ## Summary of Damage Sources
 
-Damage can occur in four main ways:
+Damage can occur in several ways:
 
-1. **Initial War flip** at the start of each round:
-   - Higher card deals damage equal to value difference.
-2. **Immediate lane resolution** when both sides of a lane reach 3 cards:
-   - Higher lane total (base + bonus) deals damage equal to lane total difference.
-   - Active card suit effects (damage bonus/healing) are applied (v1.3).
-3. **End-of-round full-board resolution**:
-   - All lanes resolve; each winner per lane deals damage equal to lane total difference.
-   - Active card suit effects (damage bonus/healing) are applied (v1.3).
-4. **Discard damage**:
-   - Whenever a player discards a card directly from hand to the discard pile, that player takes damage equal to the **value of that card**.
-   - This applies for every such discard, and discarding is always allowed.
+1. **On-Play Effects** (v2.0):
+   - **Aces and Face Cards (J/Q/K)** of your active suit trigger effects immediately when played
+   - Spades J/Q/K/A deal direct damage
+   - Diamonds Ace deals self-damage as a cost
 
-These rules define the complete behavior for the v1.3 implementation.
+2. **Lane Resolution**:
+   - Higher lane total (base + poker bonus) deals damage equal to the difference
+   - Low-tier (2-6) and Mid-tier (7-10) suit effects trigger based on win/loss
+   - Blood Debt stacks are consumed on lane wins for bonus damage
+
+3. **Damage Over Time**:
+   - Bleed stacks deal 2 damage per stack at the start of your turn
+
+4. **Discard Damage**:
+   - Discarding a card from hand deals damage to you equal to that card's value
+
+5. **Support Ability** (damage suits):
+   - Diamonds and Spades Support abilities deal 5 damage (+ Charge Power for Diamonds)
+
+**Note:** The War flip no longer deals damage in v2.0 – it only determines turn order and field control.
 
 ---
 
-## Active Cards and Suit Effects (v1.3)
+## Active Cards and Suit Abilities (v2.0)
 
-At the start of the game, each player chooses a suit. Cards of their chosen suit become "active" and provide special effects.
+At the start of the game, each player chooses a suit. Cards of their chosen suit become "active" and provide unique abilities based on the card's rank tier.
 
 ### Visual Distinction
 
 - **Active Cards**: Displayed in full color
 - **Inactive Cards**: Displayed in grayscale
-- **Jokers**: Always count as active for their owner
-
-### Suit Effect Types
-
-**IMPORTANT:** Suit effects only activate if the player **wins** the lane. If you lose a lane, your active cards provide no benefit.
-
-**Damage Suits (Diamonds, Spades)**
-- When you WIN a lane, your active cards add bonus damage to the opponent
-- The bonus is applied AFTER the lane winner is determined (not part of the lane total comparison)
-
-**Healing Suits (Hearts, Clubs)**
-- When you WIN a lane, your active cards heal YOU
-- Healing is applied AFTER lane resolution (not damage mitigation)
-
-### Effect Values by Card Rank
-
-| Card Ranks | Effect Value |
-|------------|--------------|
-| 2, 3, 4, 5 | +7 |
-| 6, 7, 8, 9, 10 | +5 |
-| J, Q, K, Joker | +3 |
-
-### Lane Resolution with Suit Effects
-
-When a lane resolves:
-
-1. Calculate base lane totals (card values + poker bonuses)
-2. Determine the winner (higher total wins)
-3. Calculate base damage (winner total - loser total)
-4. **Only the WINNER's active cards activate:**
-   - If winner has Diamonds/Spades: Add bonus damage to loser
-   - If winner has Hearts/Clubs: Winner heals themselves
-5. Loser's active cards provide NO benefit (they lost)
-
-**Example 1 - Winner has damage suit:**
-- Player (Diamonds) wins with total 35 vs AI's 25
-- Player has 3 active Diamond cards with +7, +5, +3 = +15 damage bonus
-- Base damage: 35 - 25 = 10
-- Final damage to AI: 10 + 15 = 25
-
-**Example 2 - Winner has healing suit:**
-- Player (Hearts) wins with total 30 vs AI's 20
-- Player has 2 active Heart cards with +5, +3 = +8 healing
-- Base damage to AI: 30 - 20 = 10 (no bonus added)
-- Player heals: +8 HP
-
-**Example 3 - Loser's cards don't activate:**
-- AI wins the lane (AI total > Player total)
-- Player (Diamonds) has 3 active cards, but they DON'T add damage
-- Only the AI's active cards (if any) would provide effects
+- **Jokers**: Display based on their suit (each Joker has a suit), but **never trigger suit abilities**
 
 ---
 
-## Support Ability (v1.4)
+## Suit Ability System (v2.1)
+
+Each suit has unique abilities that trigger at different times based on card rank. For detailed information on all suit effects, see **[SUIT_EFFECTS.md](SUIT_EFFECTS.md)**.
+
+### Trigger Timing by Rank
+
+| Rank Tier | Trigger |
+|-----------|---------|
+| **Low (2-6)** | On lane resolution (loss-oriented) |
+| **Mid (7-10)** | On lane resolution (win-oriented) |
+| **High (J/Q/K)** | **ON PLAY** (immediate when card is played) |
+| **Ace** | **ON PLAY** (immediate when card is played) |
+
+### Suit Overviews
+
+| Suit | Theme | Key Mechanics |
+|------|-------|---------------|
+| **Clubs** | Control & Disruption | Card replacement, board manipulation, lane neutralization |
+| **Spades** | Aggression & Pressure | Direct damage, Blood Debt, Bleed DoT |
+| **Hearts** | Sustain & Defense | Damage mitigation, Regen stacks, healing over time |
+| **Diamonds** | Scaling & Sacrifice | Charges, Charge Power, self-damage for power |
+
+---
+
+## Support Ability (v2.0)
 
 Each player has a Support character that can be activated after losing lanes.
 
-### Unlocking the Support Ability
+### Unlocking
 
-- The support ability becomes available after a player **loses 2 lanes**.
-- A lane loss counts when the player has cards in the lane and the opponent wins.
-- Once unlocked, the support icon **glows** to indicate it's ready to use.
-- The ability can be used **once** per unlock (must lose 2 more lanes to unlock again).
+- Unlocked after losing **2 lanes**
+- A lane loss = you had cards in the lane AND opponent won
+- Support icon glows when ready
+- Resets after use (must lose 2 more lanes to unlock again)
 
-### Using the Ability
+### Effects by Suit
 
-**Player:**
-- Click the glowing support icon during your turn to activate the ability.
-
-**AI:**
-- When the AI's support ability is ready, the icon glows for ~1.5 seconds before the AI uses it automatically at the start of their turn.
-
-### Ability Effects (Based on Suit)
-
-| Suit | Effect |
-|------|--------|
-| Diamonds | Deal 5 damage to opponent |
-| Spades | Deal 5 damage to opponent |
-| Hearts | Heal self for 5 HP |
-| Clubs | Heal self for 5 HP |
+| Suit | Type | Effect |
+|------|------|--------|
+| Clubs | Heal | Heal 5 HP |
+| Spades | Damage | Deal 5 damage |
+| Hearts | Heal | Heal 5 HP |
+| Diamonds | Damage | Deal (5 + Charge Power) damage |
 
 **Note:** Health can exceed the starting 100 HP cap when using healing abilities.
 

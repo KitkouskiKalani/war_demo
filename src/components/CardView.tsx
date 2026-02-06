@@ -3,9 +3,12 @@
  * Supports active (color) and inactive (grayscale) card art based on owner's chosen suit
  */
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import type { Card, StandardSuit } from '../game/types'
 import { getCardTooltipData, getJokerOnBoardTooltip } from '../game/suitEffects'
+
+// Global event to dismiss all tooltips when a new one opens
+const TOOLTIP_DISMISS_EVENT = 'card-tooltip-dismiss'
 
 interface CardViewProps {
   card: Card
@@ -50,10 +53,9 @@ function getRankString(rank: number | string): string {
 }
 
 // Check if a card is "active" (matches the owner's chosen suit)
+// Jokers now have suits and are active only if their suit matches the owner's suit
 function isCardActive(card: Card, ownerSuit: StandardSuit | null | undefined): boolean {
   if (!ownerSuit) return true // If no owner suit specified, default to active
-  // Jokers are always active for their owner
-  if (card.rank === 'JOKER') return true
   return card.suit === ownerSuit
 }
 
@@ -65,11 +67,10 @@ function getCardImagePath(card: Card, ownerSuit?: StandardSuit | null): string {
   
   // Jokers are stored as [Suit]_Joker.png in each suit folder
   if (card.rank === 'JOKER') {
-    const jokerSuit = card.suit === 'joker' ? 'Hearts' : suitFolder
     if (isActive) {
-      return `/assets/cards/Active Cards - Color/${jokerSuit} - Active Cards/${jokerSuit}_Joker.png`
+      return `/assets/cards/Active Cards - Color/${suitFolder} - Active Cards/${suitFolder}_Joker.png`
     } else {
-      return `/assets/cards/Inactive Cards - Grayscale/${jokerSuit} - inactive Cards/${jokerSuit}_Joker_grey.png`
+      return `/assets/cards/Inactive Cards - Grayscale/${suitFolder} - inactive Cards/${suitFolder}_Joker_grey.png`
     }
   }
   
@@ -123,10 +124,30 @@ export function CardView({
 }: CardViewProps) {
   const [showTooltip, setShowTooltip] = useState(false)
   const [tooltipPinned, setTooltipPinned] = useState(false)
-  const hoverTimeoutRef = useRef<number | null>(null)
+  const [tooltipPosition, setTooltipPosition] = useState<'above' | 'below'>('above')
   const cardRef = useRef<HTMLDivElement>(null)
   
   const isActive = isCardActive(card, ownerSuit)
+  
+  // Hide tooltip helper
+  const hideTooltip = useCallback(() => {
+    setShowTooltip(false)
+    setTooltipPinned(false)
+  }, [])
+  
+  // Listen for global tooltip dismiss events - ensures only one tooltip at a time
+  useEffect(() => {
+    const handleDismiss = (e: Event) => {
+      const customEvent = e as CustomEvent
+      // Don't dismiss if this is the card that triggered the event
+      if (customEvent.detail !== card.id) {
+        hideTooltip()
+      }
+    }
+    
+    window.addEventListener(TOOLTIP_DISMISS_EVENT, handleDismiss)
+    return () => window.removeEventListener(TOOLTIP_DISMISS_EVENT, handleDismiss)
+  }, [card.id, hideTooltip])
   
   const classes = [
     'card',
@@ -182,25 +203,22 @@ export function CardView({
   // Hover handlers for desktop tooltip - instant show on hover
   const handleMouseEnter = () => {
     if (tooltipData && !isDragging && !faceDown) {
-      // Clear any pending hide
-      if (hoverTimeoutRef.current) {
-        clearTimeout(hoverTimeoutRef.current)
-        hoverTimeoutRef.current = null
+      // Dismiss any other open tooltips
+      window.dispatchEvent(new CustomEvent(TOOLTIP_DISMISS_EVENT, { detail: card.id }))
+      
+      // Check if card is near top of screen - show tooltip below if so
+      if (cardRef.current) {
+        const rect = cardRef.current.getBoundingClientRect()
+        setTooltipPosition(rect.top < 120 ? 'below' : 'above')
       }
       setShowTooltip(true)
     }
   }
 
   const handleMouseLeave = () => {
-    if (hoverTimeoutRef.current) {
-      clearTimeout(hoverTimeoutRef.current)
-      hoverTimeoutRef.current = null
-    }
-    // Hide after a brief delay (allows moving to tooltip if needed)
+    // Hide immediately (no delay) unless pinned
     if (!tooltipPinned) {
-      hoverTimeoutRef.current = window.setTimeout(() => {
-        setShowTooltip(false)
-      }, 100)
+      hideTooltip()
     }
   }
 
@@ -209,9 +227,15 @@ export function CardView({
     // For mobile: toggle tooltip pin on tap
     if (tooltipData && !isDragging && !faceDown) {
       if (tooltipPinned) {
-        setTooltipPinned(false)
-        setShowTooltip(false)
+        hideTooltip()
       } else {
+        // Dismiss other tooltips and show this one
+        window.dispatchEvent(new CustomEvent(TOOLTIP_DISMISS_EVENT, { detail: card.id }))
+        
+        if (cardRef.current) {
+          const rect = cardRef.current.getBoundingClientRect()
+          setTooltipPosition(rect.top < 120 ? 'below' : 'above')
+        }
         setTooltipPinned(true)
         setShowTooltip(true)
       }
@@ -229,8 +253,7 @@ export function CardView({
 
     const handleClickOutside = (e: Event) => {
       if (cardRef.current && !cardRef.current.contains(e.target as Node)) {
-        setTooltipPinned(false)
-        setShowTooltip(false)
+        hideTooltip()
       }
     }
 
@@ -241,16 +264,8 @@ export function CardView({
       document.removeEventListener('mousedown', handleClickOutside)
       document.removeEventListener('touchstart', handleClickOutside)
     }
-  }, [tooltipPinned])
+  }, [tooltipPinned, hideTooltip])
 
-  // Cleanup timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (hoverTimeoutRef.current) {
-        clearTimeout(hoverTimeoutRef.current)
-      }
-    }
-  }, [])
 
   return (
     <div 
@@ -275,7 +290,7 @@ export function CardView({
       
       {/* Custom tooltip with structured content */}
       {showTooltip && tooltipData && (
-        <div className={`card-tooltip ${card.rank === 'JOKER' ? 'joker' : isActive ? 'active' : 'inactive'}`}>
+        <div className={`card-tooltip ${card.rank === 'JOKER' ? 'joker' : isActive ? 'active' : 'inactive'} tooltip-${tooltipPosition}`}>
           <div className="tooltip-header">{tooltipData.header}</div>
           <div className="tooltip-damage">{tooltipData.baseDamage}</div>
           {tooltipData.description && (

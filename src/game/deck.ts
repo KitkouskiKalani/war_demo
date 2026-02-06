@@ -34,8 +34,9 @@ export function createDeck(): Card[] {
     }
   }
 
-  for (let i = 0; i < JOKER_COUNT; i++) {
-    cards.push({ id: `card-${cardIndex++}`, suit: 'joker', rank: 'JOKER' });
+  // Create one Joker of each suit (4 total)
+  for (const suit of STANDARD_SUITS) {
+    cards.push({ id: `card-${cardIndex++}`, suit, rank: 'JOKER' });
   }
 
   return cards;

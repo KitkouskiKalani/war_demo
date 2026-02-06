@@ -9,8 +9,8 @@ export type { JokerMimicInfo } from './poker';
 export { applyDamage, createEmptyLanes, drawCards, findLane, initializeNewGame, isLaneReadyToResolve, startNewRound, updateLane } from './state';
 export type { GameAction } from './reducer';
 export { canEndTurn, canPlayCardToLane, gameReducer } from './reducer';
-export { executeAITurn, getAIMove } from './ai';
-export type { AIMove } from './ai';
+export { executeAITurn, getAIMove, getAIEffectChoice } from './ai';
+export type { AIMove, AIEffectChoiceAction } from './ai';
 export { applyWinnerDamageBonus, calculateLaneSuitEffects, getCardEffectTooltip, getSuitEffectValue, isCardActive, DAMAGE_SUITS, HEALING_SUITS } from './suitEffects';
 
 

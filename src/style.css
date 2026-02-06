@@ -529,26 +529,35 @@ body {
    CARD TOOLTIP STYLES
    ======================================== */
 
-/* When a card shows tooltip, raise it above everything except overlays */
+/* When a card shows tooltip, raise it above lanes/indicators but below modals */
 .card.tooltip-visible {
-  z-index: 9998 !important;
+  z-index: 800 !important;
   isolation: isolate;
 }
 
 .card-tooltip {
   position: absolute;
-  bottom: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%);
   padding: 10px 14px;
   border-radius: 8px;
   font-size: 12px;
-  white-space: nowrap;
-  z-index: 9999;
+  white-space: normal;
+  z-index: 900;
   pointer-events: none;
   animation: tooltip-appear 0.2s ease-out;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
   text-align: center;
+  width: 180px;
+}
+
+/* Tooltip vertical position */
+.card-tooltip.tooltip-above {
+  bottom: calc(100% + 8px);
+}
+
+.card-tooltip.tooltip-below {
+  top: calc(100% + 8px);
 }
 
 .tooltip-header {
@@ -569,6 +578,8 @@ body {
   margin-top: 6px;
   padding-top: 6px;
   border-top: 1px solid rgba(255, 255, 255, 0.2);
+  line-height: 1.4;
+  word-wrap: break-word;
 }
 
 .card-tooltip.active .tooltip-effect {
@@ -579,11 +590,9 @@ body {
 @keyframes tooltip-appear {
   from {
     opacity: 0;
-    transform: translateX(-50%) translateY(4px);
   }
   to {
     opacity: 1;
-    transform: translateX(-50%) translateY(0);
   }
 }
 
@@ -628,30 +637,12 @@ body {
   line-height: 1.3;
 }
 
-/* Arrow pointing down to card */
-.card-tooltip::after {
-  content: '';
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  border: 6px solid transparent;
-  border-top-color: inherit;
-}
+/* Arrow removed - tooltip uses fixed positioning with boundary detection */
 
-.card-tooltip.active::after {
-  border-top-color: #fbbf24;
-}
-
-.card-tooltip.inactive::after {
-  border-top-color: #6b7280;
-}
-
-/* Small cards - position tooltip differently */
+/* Small cards - smaller tooltip font */
 .card-small .card-tooltip {
   font-size: 10px;
   padding: 6px 10px;
-  bottom: calc(100% + 4px);
 }
 
 /* Drag ghost - follows touch/cursor during drag */
@@ -931,6 +922,92 @@ body {
 
 .lane-targetable:hover {
   box-shadow: 0 0 30px rgba(251, 191, 36, 0.6), inset 0 0 20px rgba(251, 191, 36, 0.2);
+}
+
+/* Board selection mode styles (for Clubs effects) */
+.lane-selection-neutralize {
+  border-color: #a855f7 !important;
+  box-shadow: 0 0 25px rgba(168, 85, 247, 0.5), inset 0 0 15px rgba(168, 85, 247, 0.2) !important;
+  cursor: pointer !important;
+  animation: pulse-selection 1s ease-in-out infinite;
+}
+
+.lane-selection-neutralize:hover {
+  box-shadow: 0 0 35px rgba(168, 85, 247, 0.8), inset 0 0 25px rgba(168, 85, 247, 0.3) !important;
+}
+
+.lane-selection-move-source {
+  border-color: #22c55e !important;
+  box-shadow: 0 0 25px rgba(34, 197, 94, 0.5), inset 0 0 15px rgba(34, 197, 94, 0.2) !important;
+  cursor: pointer !important;
+  animation: pulse-selection 1s ease-in-out infinite;
+}
+
+.lane-selection-move-source:hover {
+  box-shadow: 0 0 35px rgba(34, 197, 94, 0.8), inset 0 0 25px rgba(34, 197, 94, 0.3) !important;
+}
+
+.lane-move-source {
+  border-color: #f59e0b !important;
+  box-shadow: 0 0 30px rgba(245, 158, 11, 0.6), inset 0 0 20px rgba(245, 158, 11, 0.2) !important;
+}
+
+.lane-selection-move-target {
+  border-color: #3b82f6 !important;
+  box-shadow: 0 0 25px rgba(59, 130, 246, 0.5), inset 0 0 15px rgba(59, 130, 246, 0.2) !important;
+  cursor: pointer !important;
+  animation: pulse-selection 1s ease-in-out infinite;
+}
+
+.lane-selection-move-target:hover {
+  box-shadow: 0 0 35px rgba(59, 130, 246, 0.8), inset 0 0 25px rgba(59, 130, 246, 0.3) !important;
+}
+
+@keyframes pulse-selection {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.8; }
+}
+
+/* Board selection mode instructions banner */
+.board-selection-instructions {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 900;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.98), rgba(30, 41, 59, 0.92));
+  border-bottom: 2px solid rgba(168, 85, 247, 0.5);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.board-selection-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e2e8f0;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.board-selection-cancel {
+  padding: 6px 16px;
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  border-radius: 6px;
+  color: #fca5a5;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.board-selection-cancel:hover {
+  background: rgba(239, 68, 68, 0.4);
+  border-color: rgba(239, 68, 68, 0.8);
 }
 
 /* Lane glow effects for pending resolution */
@@ -2169,4 +2246,345 @@ body {
   30% { transform: scale(1.2); opacity: 1; }
   50% { transform: scale(1); }
   100% { transform: scale(1); }
+}
+
+/* ========================================
+   v2 ABILITY SYSTEM - Effect Choice Modal
+   ======================================== */
+
+.effect-choice-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.9);
+  z-index: 1000;
+  animation: modal-appear 0.3s ease-out forwards;
+}
+
+@keyframes modal-appear {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+.effect-choice-modal {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 30px 40px;
+  background: linear-gradient(145deg, rgba(30, 30, 50, 0.98), rgba(20, 20, 35, 0.98));
+  border-radius: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.5), 0 0 80px rgba(100, 100, 255, 0.1);
+  max-width: 90%;
+  max-height: 80%;
+  overflow-y: auto;
+}
+
+.effect-choice-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  text-align: center;
+}
+
+.effect-choice-description {
+  font-size: 14px;
+  color: #9ca3af;
+  text-align: center;
+  max-width: 400px;
+}
+
+.effect-choice-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.effect-choice-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 16px 24px;
+  background: linear-gradient(145deg, rgba(50, 50, 80, 0.9), rgba(40, 40, 60, 0.9));
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 200px;
+}
+
+.effect-choice-btn:hover:not(:disabled) {
+  background: linear-gradient(145deg, rgba(70, 70, 120, 0.9), rgba(50, 50, 80, 0.9));
+  border-color: rgba(255, 255, 255, 0.4);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 20px rgba(100, 100, 255, 0.2);
+}
+
+.effect-choice-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.effect-choice-btn.damage {
+  border-color: rgba(248, 113, 113, 0.5);
+}
+
+.effect-choice-btn.damage:hover:not(:disabled) {
+  border-color: #f87171;
+  box-shadow: 0 4px 20px rgba(248, 113, 113, 0.3);
+}
+
+.effect-choice-btn.heal {
+  border-color: rgba(74, 222, 128, 0.5);
+}
+
+.effect-choice-btn.heal:hover:not(:disabled) {
+  border-color: #4ade80;
+  box-shadow: 0 4px 20px rgba(74, 222, 128, 0.3);
+}
+
+.effect-choice-btn.clubs {
+  border-color: rgba(74, 222, 128, 0.5);
+}
+
+.effect-choice-btn.diamonds {
+  border-color: rgba(168, 85, 247, 0.5);
+}
+
+.effect-choice-btn-subtitle {
+  font-size: 12px;
+  color: #9ca3af;
+  font-weight: 400;
+}
+
+/* Card selection for Clubs 2-6 replacement */
+.card-selection-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  max-width: 400px;
+}
+
+.card-selection-item {
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 2px solid transparent;
+  border-radius: 8px;
+}
+
+.card-selection-item:hover {
+  border-color: rgba(255, 255, 255, 0.5);
+  transform: scale(1.05);
+}
+
+.card-selection-item.selected {
+  border-color: #4ade80;
+  box-shadow: 0 0 15px rgba(74, 222, 128, 0.5);
+}
+
+/* Replacement card options (J/Q/K of Clubs) */
+.card-selection-grid.replacement-cards {
+  margin-top: 8px;
+}
+
+.card-selection-item.replacement-option {
+  border: 2px solid rgba(34, 197, 94, 0.4);
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.3);
+}
+
+.card-selection-item.replacement-option:hover {
+  border-color: #22c55e;
+  box-shadow: 0 0 20px rgba(34, 197, 94, 0.6);
+  transform: scale(1.08);
+}
+
+/* Lane selection for neutralize */
+.lane-selection-grid {
+  display: flex;
+  gap: 12px;
+}
+
+.lane-selection-btn {
+  padding: 12px 24px;
+  background: linear-gradient(145deg, rgba(50, 50, 80, 0.9), rgba(40, 40, 60, 0.9));
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.lane-selection-btn:hover {
+  background: linear-gradient(145deg, rgba(70, 70, 120, 0.9), rgba(50, 50, 80, 0.9));
+  border-color: rgba(74, 222, 128, 0.5);
+  transform: translateY(-2px);
+}
+
+.lane-selection-btn.neutralized {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ========================================
+   v2 ABILITY SYSTEM - Status Indicators
+   ======================================== */
+
+.status-indicators {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+  justify-content: center;
+}
+
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.status-badge.blood-debt {
+  background: rgba(220, 38, 38, 0.8);
+  color: #fecaca;
+  border: 1px solid #ef4444;
+}
+
+.status-badge.bleed {
+  background: rgba(185, 28, 28, 0.8);
+  color: #fca5a5;
+  border: 1px solid #dc2626;
+  animation: bleed-pulse 1s ease-in-out infinite;
+}
+
+@keyframes bleed-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.status-badge.regen {
+  background: rgba(34, 197, 94, 0.8);
+  color: #bbf7d0;
+  border: 1px solid #22c55e;
+  animation: regen-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes regen-pulse {
+  0%, 100% { box-shadow: 0 0 5px rgba(34, 197, 94, 0.5); }
+  50% { box-shadow: 0 0 15px rgba(34, 197, 94, 0.8); }
+}
+
+.status-badge.charges {
+  background: rgba(168, 85, 247, 0.8);
+  color: #e9d5ff;
+  border: 1px solid #a855f7;
+}
+
+.status-badge.support-bonus {
+  background: rgba(234, 179, 8, 0.8);
+  color: #fef3c7;
+  border: 1px solid #eab308;
+}
+
+.status-badge.charge-power {
+  background: rgba(168, 85, 247, 0.8);
+  color: #e9d5ff;
+  border: 1px solid #a855f7;
+  animation: charge-power-glow 2s ease-in-out infinite;
+}
+
+@keyframes charge-power-glow {
+  0%, 100% { box-shadow: 0 0 5px rgba(168, 85, 247, 0.3); }
+  50% { box-shadow: 0 0 12px rgba(168, 85, 247, 0.6); }
+}
+
+/* Charges display near avatar */
+.charges-display {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: linear-gradient(145deg, rgba(168, 85, 247, 0.3), rgba(139, 69, 200, 0.3));
+  border: 2px solid rgba(168, 85, 247, 0.5);
+  border-radius: 8px;
+  margin-top: 8px;
+}
+
+.charges-count {
+  font-size: 18px;
+  font-weight: 700;
+  color: #e9d5ff;
+  text-shadow: 0 0 10px rgba(168, 85, 247, 0.5);
+}
+
+.charges-label {
+  font-size: 11px;
+  color: #c4b5fd;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.spend-charge-btn {
+  padding: 6px 12px;
+  background: linear-gradient(145deg, rgba(168, 85, 247, 0.8), rgba(139, 69, 200, 0.8));
+  border: 1px solid rgba(168, 85, 247, 0.8);
+  border-radius: 6px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.spend-charge-btn:hover:not(:disabled) {
+  background: linear-gradient(145deg, rgba(168, 85, 247, 1), rgba(139, 69, 200, 1));
+  transform: translateY(-1px);
+  box-shadow: 0 2px 10px rgba(168, 85, 247, 0.4);
+}
+
+.spend-charge-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Lane neutralized indicator */
+.lane.neutralized {
+  position: relative;
+}
+
+.lane.neutralized::before {
+  content: 'NEUTRALIZED';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-15deg);
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.3);
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  pointer-events: none;
+  z-index: 10;
 }
