@@ -42,8 +42,8 @@ export type GameAction =
   | { type: 'CONFIRM_READY' }  // For pass device screen
   | { type: 'INITIAL_FLIP_STEP' }
   | { type: 'CONTINUE_FROM_FLIP' }
-  | { type: 'PLAY_CARD_TO_LANE'; cardId: string; laneId: LaneId }
-  | { type: 'DISCARD_CARD'; cardId: string }
+  | { type: 'PLAY_CARD_TO_LANE'; cardId: string; laneId: LaneId; fromNetwork?: boolean }
+  | { type: 'DISCARD_CARD'; cardId: string; fromNetwork?: boolean }
   | { type: 'END_TURN'; fromNetwork?: boolean }  // fromNetwork skips validation for remote actions
   | { type: 'RESOLVE_LANE'; laneId: LaneId }
   | { type: 'RESOLVE_END_OF_ROUND' }
@@ -88,8 +88,8 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     case 'CONFIRM_READY': return handleConfirmReady(state);
     case 'INITIAL_FLIP_STEP': return handleInitialFlipStep(state);
     case 'CONTINUE_FROM_FLIP': return handleContinueFromFlip(state);
-    case 'PLAY_CARD_TO_LANE': return handlePlayCardToLane(state, action.cardId, action.laneId);
-    case 'DISCARD_CARD': return handleDiscardCard(state, action.cardId);
+    case 'PLAY_CARD_TO_LANE': return handlePlayCardToLane(state, action.cardId, action.laneId, action.fromNetwork);
+    case 'DISCARD_CARD': return handleDiscardCard(state, action.cardId, action.fromNetwork);
     case 'END_TURN': return handleEndTurn(state, action.fromNetwork);
     case 'RESOLVE_LANE': return resolveLane(state, action.laneId);
     case 'RESOLVE_END_OF_ROUND': return handleResolveEndOfRound(state);
@@ -344,8 +344,20 @@ function handleContinueFromFlip(state: GameState): GameState {
   };
 }
 
-function handlePlayCardToLane(state: GameState, cardId: string, laneId: LaneId): GameState {
-  if (state.phase !== 'Main') return state;
+function handlePlayCardToLane(state: GameState, cardId: string, laneId: LaneId, fromNetwork?: boolean): GameState {
+  // For local actions, require Main phase
+  if (!fromNetwork && state.phase !== 'Main') {
+    console.log(`[PlayCard] Blocked - phase is ${state.phase}, not Main`);
+    return state;
+  }
+  
+  // For network actions, be more lenient - the sender validated it
+  if (fromNetwork) {
+    console.log(`[Network] Received PLAY_CARD_TO_LANE from network for player ${state.currentPlayer}, phase=${state.phase}`);
+    if (state.phase !== 'Main') {
+      console.warn(`[Network] PLAY_CARD received but phase is ${state.phase} - processing anyway`);
+    }
+  }
 
   const currentPlayerState = state.currentPlayer === 1 ? state.player1 : state.player2;
   const card = findCardById(currentPlayerState.hand, cardId);
@@ -463,8 +475,20 @@ function handlePlayCardToLane(state: GameState, cardId: string, laneId: LaneId):
   return newState;
 }
 
-function handleDiscardCard(state: GameState, cardId: string): GameState {
-  if (state.phase !== 'Main') return state;
+function handleDiscardCard(state: GameState, cardId: string, fromNetwork?: boolean): GameState {
+  // For local actions, require Main phase
+  if (!fromNetwork && state.phase !== 'Main') {
+    console.log(`[Discard] Blocked - phase is ${state.phase}, not Main`);
+    return state;
+  }
+  
+  // For network actions, be more lenient
+  if (fromNetwork) {
+    console.log(`[Network] Received DISCARD_CARD from network for player ${state.currentPlayer}, phase=${state.phase}`);
+    if (state.phase !== 'Main') {
+      console.warn(`[Network] DISCARD received but phase is ${state.phase} - processing anyway`);
+    }
+  }
 
   const currentPlayerState = state.currentPlayer === 1 ? state.player1 : state.player2;
   const card = findCardById(currentPlayerState.hand, cardId);
@@ -556,7 +580,18 @@ function processPendingLanesForPlayer(state: GameState, player: CurrentPlayer): 
 }
 
 function handleEndTurn(state: GameState, fromNetwork?: boolean): GameState {
-  if (state.phase !== 'Main') return state;
+  // For local actions, require Main phase
+  // For network actions, be more lenient to handle desync
+  if (!fromNetwork && state.phase !== 'Main') {
+    console.log(`[EndTurn] Blocked - phase is ${state.phase}, not Main`);
+    return state;
+  }
+  
+  // If from network but not in Main phase, log warning but still try to process
+  if (fromNetwork && state.phase !== 'Main') {
+    console.warn(`[Network] END_TURN received but phase is ${state.phase} - forcing phase to Main`);
+    state = { ...state, phase: 'Main' };
+  }
   
   const currentPlayer = state.currentPlayer;
   const currentPlayerState = currentPlayer === 1 ? state.player1 : state.player2;
@@ -573,7 +608,7 @@ function handleEndTurn(state: GameState, fromNetwork?: boolean): GameState {
       return state; // Can't end turn yet
     }
   } else {
-    console.log(`[Network] Processing END_TURN from network - skipping validation`);
+    console.log(`[Network] Processing END_TURN from network - currentPlayer was ${currentPlayer}, cardsPlayed was ${state.cardsPlayedThisTurn}, skipping validation`);
   }
 
   let player1 = { ...state.player1 };
@@ -618,6 +653,7 @@ function handleEndTurn(state: GameState, fromNetwork?: boolean): GameState {
 
   // Switch to next player
   const nextPlayer: CurrentPlayer = currentPlayer === 1 ? 2 : 1;
+  console.log(`[Turn] Switching from player ${currentPlayer} to player ${nextPlayer}, cardsPlayedThisTurn will reset to 0`);
   
   // START OF TURN: Draw 1 card for next player (reactive element)
   // BUT only if they've already had a turn (hand < initial size)

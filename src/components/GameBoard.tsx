@@ -120,6 +120,13 @@ export function GameBoard() {
   
   // In PvP/online mode, both players can act on their turn; in AI mode, only player 1
   const canAct = state.phase === 'Main' && !isAIThinking && state.cardsPlayedThisTurn < 3 && isLocalPlayerTurn
+  
+  // Debug logging for online mode - log on every render when in Main phase
+  useEffect(() => {
+    if (state.gameMode === 'online' && state.phase === 'Main') {
+      console.log(`[canAct Debug] phase=${state.phase}, currentPlayer=${state.currentPlayer}, localPlayer=${state.localPlayer}, cardsPlayed=${state.cardsPlayedThisTurn}, isLocalPlayerTurn=${isLocalPlayerTurn}, canAct=${canAct}, isAIThinking=${isAIThinking}`);
+    }
+  }, [state.gameMode, state.phase, state.currentPlayer, state.localPlayer, state.cardsPlayedThisTurn, isLocalPlayerTurn, canAct, isAIThinking]);
 
   // Handler for player using support ability
   const handlePlayerUseSupport = () => {
@@ -551,17 +558,26 @@ export function GameBoard() {
 
   // Network action handler for online mode
   const handleNetworkAction = useCallback((action: any) => {
-    console.log('[GameBoard] Received network action:', action.type)
+    console.log('[GameBoard] Received network action:', action.type, action.action?.type)
     
     // Handle incoming game actions from opponent
     if (action.type === 'GAME_ACTION') {
-      // For END_TURN, add fromNetwork flag to skip validation (already validated by sender)
-      if (action.action.type === 'END_TURN') {
-        dispatch({ ...action.action, fromNetwork: true })
+      const gameAction = action.action;
+      
+      // Mark all game actions as fromNetwork for proper handling
+      const actionWithFlag = { ...gameAction, fromNetwork: true };
+      dispatch(actionWithFlag);
+      
+      // Show "Your Turn" popup when opponent ends turn
+      if (gameAction.type === 'END_TURN') {
+        console.log('[Network] Opponent ended turn - should be our turn now');
         setShowYourTurn(true)
         setTimeout(() => setShowYourTurn(false), 1500)
-      } else {
-        dispatch(action.action)
+        
+        // Debug: Log state after a short delay to see if reducer worked
+        setTimeout(() => {
+          console.log('[Network Debug] After END_TURN processed - checking if we can act');
+        }, 100);
       }
     }
     
