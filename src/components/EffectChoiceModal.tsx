@@ -545,7 +545,7 @@ export function StatusIndicators({ player, state }: StatusIndicatorsProps) {
   if (playerState.bloodDebtStacks > 0) {
     indicators.push(
       <div key="blood-debt" className="status-badge blood-debt">
-        Blood Debt: {playerState.bloodDebtStacks}
+        Debt {playerState.bloodDebtStacks}
       </div>
     )
   }
@@ -555,7 +555,7 @@ export function StatusIndicators({ player, state }: StatusIndicatorsProps) {
   if (bleedDamagePerTurn > 0) {
     indicators.push(
       <div key="bleed" className="status-badge bleed">
-        Bleed: {bleedDamagePerTurn}/turn
+        Bleed {bleedDamagePerTurn}/t
       </div>
     )
   }
@@ -567,7 +567,7 @@ export function StatusIndicators({ player, state }: StatusIndicatorsProps) {
     const totalHealPerTurn = Math.floor(baseHealPerTurn * bonusMultiplier)
     indicators.push(
       <div key="regen" className="status-badge regen">
-        Regen: {totalHealPerTurn}/turn
+        Regen {totalHealPerTurn}/t
       </div>
     )
   }
@@ -576,7 +576,7 @@ export function StatusIndicators({ player, state }: StatusIndicatorsProps) {
   if (playerState.regenEffectBonus > 0 && playerState.regenEffectBonusTurnsRemaining > 0) {
     indicators.push(
       <div key="regen-bonus" className="status-badge regen-bonus">
-        Regen Bonus +{playerState.regenEffectBonus} ({playerState.regenEffectBonusTurnsRemaining}t)
+        Regen +{playerState.regenEffectBonus} ({playerState.regenEffectBonusTurnsRemaining}t)
       </div>
     )
   }
@@ -585,7 +585,7 @@ export function StatusIndicators({ player, state }: StatusIndicatorsProps) {
   if (playerState.chargePower > 0) {
     indicators.push(
       <div key="charge-power" className="status-badge charge-power">
-        Charge Power +{playerState.chargePower}
+        Power +{playerState.chargePower}
       </div>
     )
   }
@@ -614,16 +614,22 @@ export function ChargesDisplay({ player, state, onSpendCharge, canSpend }: Charg
   const playerState = player === 1 ? state.player1 : state.player2
   const playerSuit = player === 1 ? state.player1Suit : state.player2Suit
   
-  // Only show for Diamonds players with charges
-  if (playerSuit !== 'diamonds' || playerState.diamondCharges === 0) {
+  // Only show for Diamonds players with resources
+  if (playerSuit !== 'diamonds' || (playerState.diamondCharges === 0 && playerState.chargePower === 0)) {
     return null
   }
   
+  const effectValue = 5 + playerState.chargePower
+
   return (
-    <div className="charges-display">
-      <div>
-        <div className="charges-count">{playerState.diamondCharges}</div>
-        <div className="charges-label">Charges</div>
+    <div className={`charges-display ${canSpend ? 'can-spend' : 'read-only'}`}>
+      <div className="charges-main">
+        {playerState.chargePower > 0 && (
+          <div className="charges-chip">Power +{playerState.chargePower}</div>
+        )}
+        {playerState.diamondCharges > 0 && (
+          <div className="charges-chip">{playerState.diamondCharges} Charges</div>
+        )}
       </div>
       {canSpend && !showSpendMenu && (
         <button 
@@ -634,20 +640,20 @@ export function ChargesDisplay({ player, state, onSpendCharge, canSpend }: Charg
         </button>
       )}
       {showSpendMenu && (
-        <div style={{display: 'flex', gap: '4px'}}>
+        <div className="spend-menu">
           <button 
             className="spend-charge-btn"
             onClick={() => { onSpendCharge('damage'); setShowSpendMenu(false); }}
             style={{background: 'rgba(248, 113, 113, 0.8)', borderColor: '#f87171'}}
           >
-            {5 + playerState.chargePower} Dmg
+            {effectValue} Dmg
           </button>
           <button 
             className="spend-charge-btn"
             onClick={() => { onSpendCharge('heal'); setShowSpendMenu(false); }}
             style={{background: 'rgba(74, 222, 128, 0.8)', borderColor: '#4ade80'}}
           >
-            {5 + playerState.chargePower} Heal
+            {effectValue} Heal
           </button>
           <button 
             className="spend-charge-btn"

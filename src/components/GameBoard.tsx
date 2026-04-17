@@ -46,6 +46,15 @@ function getSupportPath(suit: StandardSuit | null): string {
   return `/assets/cards/Avatars and Supports/${SUIT_FOLDER_MAP[suit]}_Support.png`
 }
 
+// Get relic path for a suit (inactive for now; active variants reserved for future functionality)
+function getRelicPath(suit: StandardSuit | null, relic: 'skull' | 'sword', isActive = false): string {
+  if (isActive) {
+    return `/assets/cards/Avatars and Supports/Relics/Active_Relic_${relic === 'skull' ? 'Skull' : 'Sword'}.png`
+  }
+  const suitFolder = suit ? SUIT_FOLDER_MAP[suit] : 'Hearts'
+  return `/assets/cards/Avatars and Supports/Relics/${suitFolder}_Relic_${relic === 'skull' ? 'Skull' : 'Sword'}.png`
+}
+
 // Get background image based on field control suit
 function getBackgroundImage(fieldControlSuit: StandardSuit | null): string {
   if (fieldControlSuit) {
@@ -118,15 +127,33 @@ export function GameBoard() {
       ? true  // Hotseat: always "local" since both players share the device
       : isPlayerTurn
   
-  // In PvP/online mode, both players can act on their turn; in AI mode, only player 1
-  const canAct = state.phase === 'Main' && !isAIThinking && state.cardsPlayedThisTurn < 3 && isLocalPlayerTurn
+  // In PvP/online mode, ignore AI-thinking lock entirely.
+  // This prevents stale AI flags from blocking input after turn changes.
+  const aiLockActive = state.gameMode === 'vs-ai' && isAIThinking
+  const canAct = state.phase === 'Main' && !aiLockActive && state.cardsPlayedThisTurn < 3 && isLocalPlayerTurn
   
   // Debug logging for online mode - log on every render when in Main phase
   useEffect(() => {
     if (state.gameMode === 'online' && state.phase === 'Main') {
-      console.log(`[canAct Debug] phase=${state.phase}, currentPlayer=${state.currentPlayer}, localPlayer=${state.localPlayer}, cardsPlayed=${state.cardsPlayedThisTurn}, isLocalPlayerTurn=${isLocalPlayerTurn}, canAct=${canAct}, isAIThinking=${isAIThinking}`);
+      console.log(`[canAct Debug] phase=${state.phase}, currentPlayer=${state.currentPlayer}, localPlayer=${state.localPlayer}, cardsPlayed=${state.cardsPlayedThisTurn}, isLocalPlayerTurn=${isLocalPlayerTurn}, canAct=${canAct}, aiLockActive=${aiLockActive}, isAIThinking=${isAIThinking}`);
     }
-  }, [state.gameMode, state.phase, state.currentPlayer, state.localPlayer, state.cardsPlayedThisTurn, isLocalPlayerTurn, canAct, isAIThinking]);
+  }, [state.gameMode, state.phase, state.currentPlayer, state.localPlayer, state.cardsPlayedThisTurn, isLocalPlayerTurn, canAct, aiLockActive, isAIThinking]);
+
+  // Defensive cleanup: if we are not in AI mode, never keep AI-lock state around.
+  useEffect(() => {
+    if (state.gameMode !== 'vs-ai' && (isAIThinking || aiExecutingRef.current)) {
+      setIsAIThinking(false)
+      aiExecutingRef.current = false
+    }
+  }, [state.gameMode, isAIThinking])
+
+  // Clear stale selection/drag state when turn or phase changes.
+  useEffect(() => {
+    setSelectedCardId(null)
+    setDraggingCardId(null)
+    setShowDragGhost(false)
+    draggingCardRef.current = null
+  }, [state.currentPlayer, state.phase])
 
   // Handler for player using support ability
   const handlePlayerUseSupport = () => {
@@ -1147,6 +1174,18 @@ export function GameBoard() {
     </div>
   )
 
+  const RelicIcon = ({
+    suit,
+    relic,
+  }: {
+    suit: StandardSuit | null
+    relic: 'skull' | 'sword'
+  }) => (
+    <div className="support-icon relic-icon" title={`${relic} relic (inactive)`}>
+      <img src={getRelicPath(suit, relic, false)} alt={`${relic} relic`} />
+    </div>
+  )
+
   // HP Display component
   const HPDisplay = ({ hp, isPlayer }: { hp: number; isPlayer: boolean }) => (
     <div className={`hp-display-box ${isPlayer ? 'player' : 'opponent'}`}>
@@ -1158,17 +1197,22 @@ export function GameBoard() {
   // Calculate hands remaining (minimum of both players' decks / 3)
   const handsRemaining = Math.floor(Math.min(state.player1.deck.length, state.player2.deck.length) / 3)
   const deckGlowClass = handsRemaining === 2 ? 'deck-glow-warning' : handsRemaining <= 1 ? 'deck-glow-danger' : ''
+  const bothDecksEmpty = state.player1.deck.length === 0 && state.player2.deck.length === 0
 
   // Draw pile component - now uses field control suit for card back
-  const DrawPile = ({ count, glowClass = '' }: { count: number; glowClass?: string }) => (
+  const DrawPile = ({ count, glowClass = '', showEmptyOutline = false }: { count: number; glowClass?: string; showEmptyOutline?: boolean }) => (
     <div className={`draw-pile ${glowClass}`}>
-      <CardView 
-        card={{ id: 'draw-pile', suit: 'hearts', rank: 2 }} 
-        faceDown 
-        small 
-        cardBackType="ai"
-        cardBackSuit={state.fieldControlSuit}
-      />
+      {showEmptyOutline ? (
+        <div className="draw-pile-empty-outline" aria-label="Empty deck" />
+      ) : (
+        <CardView 
+          card={{ id: 'draw-pile', suit: 'hearts', rank: 2 }} 
+          faceDown 
+          small 
+          cardBackType="ai"
+          cardBackSuit={state.fieldControlSuit}
+        />
+      )}
       <span className="draw-pile-count">{count}</span>
     </div>
   )
@@ -1703,17 +1747,35 @@ export function GameBoard() {
           ))}
           </div>
 
-              {/* Opponent Avatar area with HP */}
+              {/* Opponent avatar row: keep avatar perfectly centered */}
               <div className="hero-float opponent">
-                <HPDisplay hp={opponentDisplayHP} isPlayer={false} />
-                <Avatar suit={opponentSuit} isPlayer={false} takingDamage={opponentTakingDamage} healing={opponentHealing} />
-                <SupportIcon 
-                  suit={opponentSuit} 
-                  isPlayer={false} 
-                  available={opponentSupportAvailable || aiSupportGlowing}
-                />
+                <div className="hero-slot-left">
+                  <HPDisplay hp={opponentDisplayHP} isPlayer={false} />
+                </div>
+                <div className="hero-slot-center">
+                  <Avatar suit={opponentSuit} isPlayer={false} takingDamage={opponentTakingDamage} healing={opponentHealing} />
+                </div>
+                <div className="hero-slot-right">
+                  <div className="support-relic-row">
+                    <SupportIcon 
+                      suit={opponentSuit} 
+                      isPlayer={false} 
+                      available={opponentSupportAvailable || aiSupportGlowing}
+                    />
+                    <RelicIcon suit={opponentSuit} relic="skull" />
+                    <RelicIcon suit={opponentSuit} relic="sword" />
+                  </div>
+                </div>
+              </div>
+              <div className="hero-meta-row opponent">
                 <StatusIndicators player={shouldFlipPerspective ? 1 : 2} state={state} />
-          </div>
+                <ChargesDisplay
+                  player={shouldFlipPerspective ? 1 : 2}
+                  state={state}
+                  onSpendCharge={handleSpendCharge}
+                  canSpend={false}
+                />
+              </div>
             </>
           )
         })()}
@@ -1749,8 +1811,8 @@ export function GameBoard() {
                   const bottomDeckCount = shouldFlipPerspective ? state.player2.deck.length : state.player1.deck.length
                   return (
                     <>
-                      <DrawPile count={topDeckCount} glowClass={deckGlowClass} />
-                      <DrawPile count={bottomDeckCount} glowClass={deckGlowClass} />
+                      <DrawPile count={topDeckCount} glowClass={deckGlowClass} showEmptyOutline={bothDecksEmpty} />
+                      <DrawPile count={bottomDeckCount} glowClass={deckGlowClass} showEmptyOutline={bothDecksEmpty} />
                     </>
                   )
                 })()}
@@ -1816,11 +1878,11 @@ export function GameBoard() {
         </div>
 
         {/* Hint text */}
-        {canAct && state.phase === 'Main' && (
+        {/* {canAct && state.phase === 'Main' && (
           <div className={`hint-text ${selectedCardId || draggingCardId ? 'active' : ''}`}>
             {selectedCardId ? 'Tap lane or discard' : draggingCardId ? 'Drop on lane or discard' : 'Drag or tap a card'}
           </div>
-        )}
+        )} */}
       </div>
 
       {/* ===== BOTTOM: Local Player Section ===== */}
@@ -1843,14 +1905,26 @@ export function GameBoard() {
           return (
             <>
               <div className="hero-float player">
-                <HPDisplay hp={localDisplayHP} isPlayer={true} />
-                <Avatar suit={localSuit} isPlayer={true} takingDamage={localTakingDamage} healing={localHealing} />
-                <SupportIcon 
-                  suit={localSuit} 
-                  isPlayer={true} 
-                  available={localSupportAvailable}
-                  onClick={handlePlayerUseSupport}
-                />
+                <div className="hero-slot-left">
+                  <HPDisplay hp={localDisplayHP} isPlayer={true} />
+                </div>
+                <div className="hero-slot-center">
+                  <Avatar suit={localSuit} isPlayer={true} takingDamage={localTakingDamage} healing={localHealing} />
+                </div>
+                <div className="hero-slot-right">
+                  <div className="support-relic-row">
+                    <SupportIcon 
+                      suit={localSuit} 
+                      isPlayer={true} 
+                      available={localSupportAvailable}
+                      onClick={handlePlayerUseSupport}
+                    />
+                    <RelicIcon suit={localSuit} relic="skull" />
+                    <RelicIcon suit={localSuit} relic="sword" />
+                  </div>
+                </div>
+              </div>
+              <div className="hero-meta-row player">
                 <StatusIndicators player={shouldFlipPerspective ? 2 : 1} state={state} />
                 <ChargesDisplay 
                   player={shouldFlipPerspective ? 2 : 1} 
@@ -1858,7 +1932,7 @@ export function GameBoard() {
                   onSpendCharge={handleSpendCharge}
                   canSpend={state.phase === 'Main' && isLocalPlayerTurn}
                 />
-        </div>
+              </div>
 
               {/* Local Player Hand - always clickable at bottom */}
               <div 
@@ -1867,21 +1941,30 @@ export function GameBoard() {
                 onTouchEnd={handleTouchEnd}
               >
                 {state.phase === 'Main' && (
-                  localData.hand.map(card => (
-            <CardView
-              key={card.id}
-              card={card}
-              selected={selectedCardId === card.id}
-              onClick={() => handleCardClick(card.id)}
-              disabled={!canAct}
-                      ownerSuit={localSuit}
-                      draggable={canAct}
-                      isDragging={draggingCardId === card.id}
-                      onDragStart={(e) => handleDragStart(e, card.id, card, localSuit)}
-                      onDragEnd={handleDragEnd}
-                      onTouchStart={(e) => handleTouchStart(e, card.id, card, localSuit)}
-                    />
-                  ))
+                  localData.hand.map((card, index) => {
+                    const isSelected = selectedCardId === card.id
+                    const isDragging = draggingCardId === card.id
+                    return (
+                      <div
+                        key={card.id}
+                        className={`hand-card-slot${isSelected ? ' is-selected' : ''}${isDragging ? ' is-dragging' : ''}`}
+                        style={{ zIndex: isSelected || isDragging ? 40 : index + 1 }}
+                      >
+                        <CardView
+                          card={card}
+                          selected={isSelected}
+                          onClick={() => handleCardClick(card.id)}
+                          disabled={!canAct}
+                          ownerSuit={localSuit}
+                          draggable={canAct}
+                          isDragging={isDragging}
+                          onDragStart={(e) => handleDragStart(e, card.id, card, localSuit)}
+                          onDragEnd={handleDragEnd}
+                          onTouchStart={(e) => handleTouchStart(e, card.id, card, localSuit)}
+                        />
+                      </div>
+                    )
+                  })
                 )}
                 {state.phase === 'Main' && localData.hand.length === 0 && (
                   <span className="no-cards">No cards</span>

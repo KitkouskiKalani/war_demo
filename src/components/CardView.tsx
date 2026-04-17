@@ -3,7 +3,8 @@
  * Supports active (color) and inactive (grayscale) card art based on owner's chosen suit
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react'
+import { createPortal } from 'react-dom'
 import type { Card, StandardSuit } from '../game/types'
 import { getCardTooltipData, getJokerOnBoardTooltip } from '../game/suitEffects'
 
@@ -124,7 +125,7 @@ export function CardView({
 }: CardViewProps) {
   const [showTooltip, setShowTooltip] = useState(false)
   const [tooltipPinned, setTooltipPinned] = useState(false)
-  const [tooltipPosition, setTooltipPosition] = useState<'above' | 'below'>('above')
+  const [tooltipPortalRect, setTooltipPortalRect] = useState<{ top: number; left: number; position: 'above' | 'below' } | null>(null)
   const cardRef = useRef<HTMLDivElement>(null)
   
   const isActive = isCardActive(card, ownerSuit)
@@ -206,11 +207,6 @@ export function CardView({
       // Dismiss any other open tooltips
       window.dispatchEvent(new CustomEvent(TOOLTIP_DISMISS_EVENT, { detail: card.id }))
       
-      // Check if card is near top of screen - show tooltip below if so
-      if (cardRef.current) {
-        const rect = cardRef.current.getBoundingClientRect()
-        setTooltipPosition(rect.top < 120 ? 'below' : 'above')
-      }
       setShowTooltip(true)
     }
   }
@@ -231,11 +227,6 @@ export function CardView({
       } else {
         // Dismiss other tooltips and show this one
         window.dispatchEvent(new CustomEvent(TOOLTIP_DISMISS_EVENT, { detail: card.id }))
-        
-        if (cardRef.current) {
-          const rect = cardRef.current.getBoundingClientRect()
-          setTooltipPosition(rect.top < 120 ? 'below' : 'above')
-        }
         setTooltipPinned(true)
         setShowTooltip(true)
       }
@@ -266,6 +257,37 @@ export function CardView({
     }
   }, [tooltipPinned, hideTooltip])
 
+  // Keep portal tooltip position in sync with card (and clear when hidden).
+  // Only depend on showTooltip so this callback is stable; tooltipData is recreated every render
+  // and would otherwise cause the effect to re-run indefinitely (max update depth).
+  const updateTooltipRect = useCallback(() => {
+    if (!showTooltip || !cardRef.current) {
+      setTooltipPortalRect(null)
+      return
+    }
+    const rect = cardRef.current.getBoundingClientRect()
+    const position: 'above' | 'below' = rect.top < 120 ? 'below' : 'above'
+    setTooltipPortalRect({
+      top: position === 'below' ? rect.bottom + 8 : rect.top - 8,
+      left: rect.left + rect.width / 2,
+      position,
+    })
+  }, [showTooltip])
+
+  useLayoutEffect(() => {
+    if (!showTooltip) {
+      setTooltipPortalRect(null)
+      return
+    }
+    updateTooltipRect()
+    window.addEventListener('scroll', updateTooltipRect, true)
+    window.addEventListener('resize', updateTooltipRect)
+    return () => {
+      window.removeEventListener('scroll', updateTooltipRect, true)
+      window.removeEventListener('resize', updateTooltipRect)
+    }
+  }, [showTooltip, updateTooltipRect])
+
 
   return (
     <div 
@@ -288,19 +310,32 @@ export function CardView({
         draggable={false}
       />
       
-      {/* Custom tooltip with structured content */}
-      {showTooltip && tooltipData && (
-        <div className={`card-tooltip ${card.rank === 'JOKER' ? 'joker' : isActive ? 'active' : 'inactive'} tooltip-${tooltipPosition}`}>
-          <div className="tooltip-header">{tooltipData.header}</div>
-          <div className="tooltip-damage">{tooltipData.baseDamage}</div>
-          {tooltipData.description && (
-            <div className="tooltip-description">{tooltipData.description}</div>
-          )}
-          {tooltipData.effect && (
-            <div className="tooltip-effect">{tooltipData.effect}</div>
-          )}
-        </div>
-      )}
+      {/* Tooltip rendered in portal so it always appears on top of cards */}
+      {showTooltip && tooltipData && tooltipPortalRect && typeof document !== 'undefined' && document.body &&
+        createPortal(
+          <div
+            className="card-tooltip-portal"
+            style={{
+              position: 'fixed',
+              left: tooltipPortalRect.left,
+              top: tooltipPortalRect.top,
+              transform: tooltipPortalRect.position === 'above' ? 'translate(-50%, -100%)' : 'translateX(-50%)',
+              zIndex: 9999,
+            }}
+          >
+            <div className={`card-tooltip ${card.rank === 'JOKER' ? 'joker' : isActive ? 'active' : 'inactive'} tooltip-${tooltipPortalRect.position}`}>
+              <div className="tooltip-header">{tooltipData.header}</div>
+              <div className="tooltip-damage">{tooltipData.baseDamage}</div>
+              {tooltipData.description && (
+                <div className="tooltip-description">{tooltipData.description}</div>
+              )}
+              {tooltipData.effect && (
+                <div className="tooltip-effect">{tooltipData.effect}</div>
+              )}
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   )
 }

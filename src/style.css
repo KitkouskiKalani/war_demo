@@ -535,6 +535,16 @@ body {
   isolation: isolate;
 }
 
+/* Portal-rendered tooltip: always on top, no card can cover it */
+.card-tooltip-portal {
+  pointer-events: none;
+}
+.card-tooltip-portal .card-tooltip {
+  position: relative;
+  left: 0;
+  transform: none;
+}
+
 .card-tooltip {
   position: absolute;
   left: 50%;
@@ -725,25 +735,26 @@ body {
 
 .avatar-frame {
   width: 80px;
-  height: 95px;
-  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
-  overflow: hidden;
+  aspect-ratio: 530 / 693; /* Match native avatar PNG proportions exactly */
+  height: auto;
+  overflow: visible;
   flex-shrink: 0;
   position: relative;
 }
 
 .avatar-frame img {
   width: 100%;
-  height: 100%;
-  object-fit: cover;
+  height: auto;
+  object-fit: contain;
+  display: block;
 }
 
 .avatar-frame.player {
-  box-shadow: 0 0 15px rgba(34, 197, 94, 0.5);
+  box-shadow: none;
 }
 
 .avatar-frame.opponent {
-  box-shadow: 0 0 15px rgba(239, 68, 68, 0.5);
+  box-shadow: none;
 }
 
 /* Taking damage flash animation */
@@ -796,13 +807,57 @@ body {
   object-fit: cover;
 }
 
-/* Hero float - avatars centered with HP on left */
-.hero-float {
+.support-relic-row {
   display: flex;
   align-items: center;
+  gap: 10px;
+}
+
+.support-relic-row .support-icon {
+  margin-left: 0;
+}
+
+.relic-icon {
+  opacity: 0.95;
+}
+
+/* Hero row - keep avatar centered regardless of side widgets */
+.hero-float {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  width: 100%;
+  max-width: 430px;
+  column-gap: 8px;
+  padding: 4px 6px;
+}
+
+.hero-slot-left,
+.hero-slot-right {
+  display: flex;
+  align-items: center;
+}
+
+.hero-slot-left {
+  justify-self: end;
+}
+
+.hero-slot-center {
+  justify-self: center;
+}
+
+.hero-slot-right {
+  justify-self: start;
+}
+
+.hero-meta-row {
+  width: 100%;
+  display: flex;
   justify-content: center;
-  gap: 4px;
-  padding: 4px;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 2px;
 }
 
 /* Player avatar area - larger and repositioned */
@@ -815,13 +870,13 @@ body {
 
 .hero-float.player .avatar-frame {
   width: 90px;
-  height: 107px;
+  height: auto;
 }
 
 .hero-float.player .support-icon {
   width: 50px;
   height: 50px;
-  margin-left: 6px;
+  margin-left: 0;
 }
 
 /* Support ability available state - glowing effect */
@@ -1155,6 +1210,25 @@ body {
 .draw-pile .card-small {
   width: 40px;
   height: 55px;
+}
+
+.draw-pile-empty-outline {
+  width: 40px;
+  height: 55px;
+  border-radius: 6px;
+  border: 2px solid rgba(239, 68, 68, 0.95);
+  background: rgba(239, 68, 68, 0.08);
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.8), inset 0 0 8px rgba(239, 68, 68, 0.35);
+  animation: empty-deck-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes empty-deck-pulse {
+  0%, 100% {
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.8), inset 0 0 8px rgba(239, 68, 68, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 14px rgba(239, 68, 68, 1), inset 0 0 12px rgba(239, 68, 68, 0.5);
+  }
 }
 
 .draw-pile-count {
@@ -1576,6 +1650,215 @@ body {
 .no-cards {
   color: #6b7280;
   font-size: 12px;
+}
+
+/* ========================================
+   MOBILE MOCK OVERRIDES (<= 639px)
+   ======================================== */
+@media (max-width: 639px) {
+  /* ---- TOP / OPPONENT AREA ---- */
+  .top-section {
+    padding-top: max(4px, env(safe-area-inset-top, 4px));
+    gap: 0;
+    padding-bottom: 0;
+  }
+
+  /* Enemy hand: show bottom half, push top off-screen */
+  .ai-hand {
+    gap: 0;
+    overflow: visible;
+    margin-top: -30px;
+    margin-bottom: -2px;
+  }
+
+  .ai-hand .card.card-small {
+    width: 50px;
+    height: 70px;
+    margin-left: -24px;
+  }
+
+  .ai-hand .card.card-small:first-child {
+    margin-left: 0;
+  }
+
+  .hero-float.opponent {
+    margin-top: -30px;
+    margin-bottom: 0px;
+    column-gap: 6px;
+  }
+
+  .hero-float.opponent .avatar-frame {
+    width: 80px;
+    height: auto;
+  }
+
+  .hero-float.opponent .avatar-frame img {
+    object-fit: contain;
+    object-position: center;
+  }
+
+  .hero-float.opponent .support-icon {
+    width: 38px;
+    height: 38px;
+  }
+
+  /* ---- MIDDLE / BOARD ---- */
+  .middle-section {
+    gap: 2px;
+    padding: 0 2px;
+    margin-top: -12px;
+  }
+
+  .board-area {
+    min-height: 390px;
+    padding: 6px 0;
+  }
+
+  .lane {
+    width: 86px;
+    height: 360px;
+    padding: 3px;
+  }
+
+  .lanes-container {
+    gap: 6px;
+  }
+
+  .board-row {
+    gap: 3px;
+  }
+
+  .card-small {
+    width: 72px;
+    height: 100px;
+  }
+
+  .lane-cards-stack .stacked-card:not(:first-child) {
+    margin-top: -72px;
+  }
+
+  .draw-pile .card-small {
+    width: 36px;
+    height: 50px;
+  }
+
+  .draw-pile-empty-outline {
+    width: 36px;
+    height: 50px;
+  }
+
+  .discard-pile {
+    width: 36px;
+    height: 50px;
+  }
+
+  .discard-image {
+    width: 100%;
+    height: 100%;
+  }
+
+  .end-turn-btn {
+    padding: 6px 8px;
+    font-size: 9px;
+    min-width: 44px;
+  }
+
+  .side-action-right {
+    gap: 3px;
+  }
+
+  /* ---- BOTTOM / PLAYER AREA ---- */
+  .bottom-section {
+    padding: 0 4px max(4px, env(safe-area-inset-bottom, 4px));
+    gap: 0;
+  }
+
+  .hero-float.player {
+    margin-top: -10px;
+    margin-bottom: -2px;
+    transform: scale(1);
+    transform-origin: center top;
+    column-gap: 6px;
+  }
+
+  /* 20% smaller than prior enlarged avatar */
+  .hero-float.player .avatar-frame {
+    width: 96px;
+    height: auto;
+  }
+
+  .hero-float.player .avatar-frame img {
+    object-fit: contain;
+    object-position: center;
+  }
+
+  .hero-float.player .support-icon {
+    width: 42px;
+    height: 42px;
+    margin-left: 0;
+  }
+
+  .hero-meta-row {
+    gap: 4px;
+    margin-top: 1px;
+    margin-bottom: 8px;
+  }
+
+  .status-badge {
+    font-size: 8px;
+    padding: 1px 5px;
+  }
+
+  .charges-display {
+    padding: 1px 5px;
+    gap: 3px;
+  }
+
+  .charges-chip {
+    font-size: 8px;
+    padding: 1px 4px;
+  }
+
+  .spend-charge-btn {
+    font-size: 8px;
+    padding: 2px 6px;
+  }
+
+  .hand-container {
+    padding: 4px 2px 8px;
+    gap: 4px;
+    margin-top: 10px; /* Move player hand down without changing hero position */
+    overflow: visible;
+  }
+
+  .hand-container .card {
+    width: 70px;   /* ~20% larger than 58px base */
+    height: 97px;  /* ~20% larger than 81px base */
+  }
+
+  .hand-card-slot {
+    position: relative;
+    display: inline-flex;
+    margin-left: -12px; /* Looser overlap so cards are easier to read */
+  }
+
+  .hand-card-slot:first-child {
+    margin-left: 0;
+  }
+
+  .hand-card-slot.is-selected,
+  .hand-card-slot.is-dragging {
+    z-index: 40 !important;
+  }
+
+  .phase-row {
+    margin-top: 0;
+  }
+
+  .hint-text {
+    font-size: 10px;
+    padding: 0;
+  }
 }
 
 /* ========================================
@@ -2449,21 +2732,21 @@ body {
 .status-indicators {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 4px;
+  gap: 3px;
+  margin-top: 0;
   justify-content: center;
 }
 
 .status-badge {
   display: flex;
   align-items: center;
-  gap: 3px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 10px;
+  gap: 2px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.2px;
+  line-height: 1.3;
 }
 
 .status-badge.blood-debt {
@@ -2524,38 +2807,46 @@ body {
 .charges-display {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: linear-gradient(145deg, rgba(168, 85, 247, 0.3), rgba(139, 69, 200, 0.3));
-  border: 2px solid rgba(168, 85, 247, 0.5);
-  border-radius: 8px;
-  margin-top: 8px;
+  gap: 4px;
+  padding: 2px 6px;
+  background: rgba(91, 33, 182, 0.35);
+  border: 1px solid rgba(168, 85, 247, 0.55);
+  border-radius: 999px;
 }
 
-.charges-count {
-  font-size: 18px;
+.charges-main {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.charges-chip {
+  font-size: 9px;
   font-weight: 700;
   color: #e9d5ff;
-  text-shadow: 0 0 10px rgba(168, 85, 247, 0.5);
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(124, 58, 237, 0.35);
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  white-space: nowrap;
 }
 
-.charges-label {
-  font-size: 11px;
-  color: #c4b5fd;
-  text-transform: uppercase;
-  letter-spacing: 1px;
+.spend-menu {
+  display: flex;
+  gap: 4px;
 }
 
 .spend-charge-btn {
-  padding: 6px 12px;
+  padding: 3px 7px;
   background: linear-gradient(145deg, rgba(168, 85, 247, 0.8), rgba(139, 69, 200, 0.8));
   border: 1px solid rgba(168, 85, 247, 0.8);
-  border-radius: 6px;
+  border-radius: 999px;
   color: #fff;
-  font-size: 11px;
+  font-size: 9px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s ease;
+  white-space: nowrap;
 }
 
 .spend-charge-btn:hover:not(:disabled) {
