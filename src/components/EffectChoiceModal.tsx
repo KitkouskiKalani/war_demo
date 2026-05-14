@@ -23,7 +23,6 @@ interface EffectChoiceModalProps {
   onClubsQueenDelay: (targetLaneId: LaneId) => void
   onDiamondsAce: (choice: 'charges' | 'chargePower') => void  // v2.2: charges or chargePower
   onDiamondsQueen: (choice: 'damage' | 'heal') => void
-  onHeartsAce: (choice: 'regen' | 'regenEffect') => void  // v2.2
   onSpadesAce: (choice: 'bloodDebt' | 'bleed') => void  // v2.2
   onDismiss: () => void
 }
@@ -38,7 +37,6 @@ export function EffectChoiceModal({
   onClubsQueenDelay,
   onDiamondsAce,
   onDiamondsQueen,
-  onHeartsAce,
   onSpadesAce,
   onDismiss
 }: EffectChoiceModalProps) {
@@ -89,11 +87,6 @@ export function EffectChoiceModal({
         return {
           title: 'Ritual Power',
           description: 'Diamonds Queen triggered. All your charges have been consumed. Choose an effect to apply twice.'
-        }
-      case 'hearts-ace-regen-choice':
-        return {
-          title: 'Second Wind',
-          description: 'Hearts Ace on-play effect. Choose your additional bonus.'
         }
       case 'spades-ace-choice':
         return {
@@ -257,23 +250,16 @@ export function EffectChoiceModal({
         <p className="effect-choice-description">Select a lane to delay:</p>
         <div className="lane-selection-grid">
           {availableLanes.map(laneId => {
-            // Check if this lane is already delayed
-            const isAlreadyDelayed = state.laneDelayedUntilTurn[laneId]
-            // Check if this lane has a pending resolution
-            const pending = state.pendingResolutionLanes.find(p => p.laneId === laneId)
-            const isPending = !!pending
-            const turnsRemaining = pending?.turnsUntilResolution
-            
+            // v5 Round Flow: the pending-resolution / lane-delay state was
+            // removed. This Clubs Queen modal is unreachable while suit
+            // effects are disabled, but rendered safely as a plain picker.
             return (
               <button
                 key={laneId}
-                className={`lane-selection-btn ${isAlreadyDelayed ? 'delayed' : ''}`}
-                onClick={() => !isAlreadyDelayed && onClubsQueenDelay(laneId)}
-                disabled={isAlreadyDelayed}
+                className="lane-selection-btn"
+                onClick={() => onClubsQueenDelay(laneId)}
               >
                 {laneId.toUpperCase()}
-                {isPending && ` (Resolves in ${turnsRemaining})`}
-                {isAlreadyDelayed && ' (Already Delayed)'}
               </button>
             )
           })}
@@ -400,40 +386,6 @@ export function EffectChoiceModal({
     )
   }
   
-  // v2.2 Hearts Ace: +1 Regen or +1 Regen Effect
-  const renderHeartsAce = () => {
-    const bonusMultiplier = 1 + playerState.regenEffectBonus
-    const baseHealPerTurn = playerState.regenStacks.reduce((sum, stack) => sum + stack.healingPerTurn, 0)
-    const currentRegenPerTurn = Math.floor(baseHealPerTurn * bonusMultiplier)
-    // Adding +1 regen adds a new instance with 1 healing/turn
-    const newRegenPerTurn = Math.floor((baseHealPerTurn + 1) * bonusMultiplier)
-    // Adding +1 bonus increases multiplier
-    const newRegenWithBonusPerTurn = Math.floor(baseHealPerTurn * (bonusMultiplier + 1))
-    
-    return (
-      <div className="effect-choice-options">
-        <button 
-          className="effect-choice-btn heal"
-          onClick={() => onHeartsAce('regen')}
-        >
-          +1 Regen/turn (5 turns)
-          <span className="effect-choice-btn-subtitle">
-            Current: {currentRegenPerTurn}/turn → {newRegenPerTurn}/turn
-          </span>
-        </button>
-        <button 
-          className="effect-choice-btn heal"
-          onClick={() => onHeartsAce('regenEffect')}
-        >
-          +1 Regen Effect Bonus
-          <span className="effect-choice-btn-subtitle">
-            Healing: {currentRegenPerTurn}/turn → {newRegenWithBonusPerTurn}/turn
-          </span>
-        </button>
-      </div>
-    )
-  }
-  
   // v2.2 Spades Ace: +5 Blood Debt or +4 Bleed damage/turn (2 stacks * 2)
   const renderSpadesAce = () => {
     return (
@@ -504,8 +456,6 @@ export function EffectChoiceModal({
         return renderDiamondsAce()
       case 'diamonds-queen-spend':
         return renderDiamondsQueen()
-      case 'hearts-ace-regen-choice':
-        return renderHeartsAce()
       case 'spades-ace-choice':
         return renderSpadesAce()
       default:
@@ -560,23 +510,25 @@ export function StatusIndicators({ player, state }: StatusIndicatorsProps) {
     )
   }
   
-  // v2.2 Hearts Regen System - instance-based (like bleed)
-  if (playerState.regenStacks.length > 0) {
-    const baseHealPerTurn = playerState.regenStacks.reduce((sum, stack) => sum + stack.healingPerTurn, 0)
-    const bonusMultiplier = 1 + playerState.regenEffectBonus
-    const totalHealPerTurn = Math.floor(baseHealPerTurn * bonusMultiplier)
-    indicators.push(
-      <div key="regen" className="status-badge regen">
-        Regen {totalHealPerTurn}/t
-      </div>
-    )
+  // v3 Hearts Regen: permanent + temp instances (no multiplier)
+  {
+    const permanent = playerState.regenPermanent
+    const temp = playerState.regenStacks.reduce((sum, s) => sum + s.healingPerTurn, 0)
+    const total = permanent + temp
+    if (total > 0) {
+      indicators.push(
+        <div key="regen" className="status-badge regen">
+          {temp > 0 ? `Regen : ${total} (+${temp} temp)` : `Regen : ${total}`}
+        </div>
+      )
+    }
   }
-  
-  // Regen Effect Bonus (separate indicator if bonus is active)
-  if (playerState.regenEffectBonus > 0 && playerState.regenEffectBonusTurnsRemaining > 0) {
+
+  // v3 Hearts Ace: show armed damage-to-regen flag
+  if (playerState.pendingAceDamageToRegen) {
     indicators.push(
-      <div key="regen-bonus" className="status-badge regen-bonus">
-        Regen +{playerState.regenEffectBonus} ({playerState.regenEffectBonusTurnsRemaining}t)
+      <div key="ace-armed" className="status-badge regen">
+        Ace Armed
       </div>
     )
   }

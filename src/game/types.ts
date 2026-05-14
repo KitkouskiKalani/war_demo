@@ -8,14 +8,38 @@ export type StandardRank = 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 'J' | 'Q' | 'K' 
 export type StandardSuit = 'hearts' | 'diamonds' | 'clubs' | 'spades';
 
 export type GameMode = 'vs-ai' | 'vs-player' | 'online';
+export type OnlineConnectionStatus =
+  | 'offline'
+  | 'connecting'
+  | 'connected'
+  | 'reconnecting'
+  | 'opponent-disconnected';
 
 export interface Card {
   id: string;
   suit: Suit;
   rank: Rank;
+  minionEffect?: {
+    type: 'spades-damage' | 'hearts-heal';
+    owner: CurrentPlayer;
+    value: number;
+  };
 }
 
 export type LaneId = 'left' | 'middle' | 'right';
+export type RelicType = 'shield' | 'skull' | 'sword';
+
+export type RelicAvailability = Record<RelicType, boolean>;
+
+export interface RelicLaneEffects {
+  shielded: boolean;
+  swordBonus: boolean;
+}
+
+export interface LaneRelicEffects {
+  player1: RelicLaneEffects;
+  player2: RelicLaneEffects;
+}
 
 export interface LaneSide {
   cards: Card[];
@@ -72,15 +96,21 @@ export interface CardMoveTarget {
 
 export interface PlayerState {
   hp: number;
-  deck: Card[];
   hand: Card[];
+  relicsAvailable: RelicAvailability;
+  minionAvailable: boolean;
   // v2 Ability System - Persistent Buffs/Status
   bloodDebtStacks: number;      // Spades 2-6: consumed on next lane win for bonus damage
   bleedStacks: BleedStack[];    // Spades 7-10: deals damage at start of turn
-  // v2.2 Hearts Regen System (instance-based, like bleed)
-  regenStacks: RegenStack[];         // Array of regen instances (each with own duration)
-  regenEffectBonus: number;          // Added to base heal per tick (default 0)
-  regenEffectBonusTurnsRemaining: number; // Hearts turns until bonus expires (0 = inactive)
+  // v3 Hearts Regen System
+  // - regenPermanent: baseline healing/turn that persists and only grows (Queen/King gains)
+  // - regenStacks: TEMP regen instances only, each with its own 3-turn timer (2-6, Ace conversion)
+  // - regenEffectBonus / regenEffectBonusTurnsRemaining: legacy fields, unused by Hearts v3 (kept to avoid touching unrelated code)
+  regenStacks: RegenStack[];         // TEMP regen instances only
+  regenEffectBonus: number;          // Legacy - unused in Hearts v3
+  regenEffectBonusTurnsRemaining: number; // Legacy - unused in Hearts v3
+  regenPermanent: number;            // v3: Permanent regen/turn baseline (Hearts only)
+  pendingAceDamageToRegen: boolean;  // v3: Hearts Ace one-shot flag - next won lane converts damage dealt to temp regen
   diamondCharges: number;       // Diamonds 7-10: resource for spending
   chargePower: number;          // Diamonds 2-6/Ace: increases charge effect value (cap +5)
 }
@@ -112,12 +142,6 @@ export interface FlipResult {
   damage: number;
 }
 
-export interface PendingLaneResolution {
-  laneId: LaneId;
-  filledByPlayer: CurrentPlayer;
-  turnsUntilResolution: number; // Decrements each time it becomes the filling player's turn
-}
-
 // Result of a lane resolution - used for animation
 export interface LaneResolutionResult {
   laneId: LaneId;
@@ -134,6 +158,9 @@ export interface LaneResolutionResult {
   // v2: Track which effects triggered for display
   triggeredEffects?: TriggeredEffect[];
   wasNeutralized?: boolean; // True if lane was neutralized (no effects fired)
+  // v6 Poker Rework: record the best hand each side formed so UI can label the winning hand
+  player1HandType?: import('./pokerBonuses').HandType;
+  player2HandType?: import('./pokerBonuses').HandType;
 }
 
 // v2 Ability System - Effect tracking for UI display
@@ -167,7 +194,10 @@ export interface GameState {
   player1: PlayerState;
   player2: PlayerState;
   lanes: Lane[];
-  discardPile: Card[];
+  // v4 Shared Deck System: single community deck both players draw from,
+  // and a hidden pile for cards that are out of play until the next round.
+  sharedDeck: Card[];
+  outOfPlayPile: Card[];
   currentPlayer: CurrentPlayer;
   roundNumber: number;
   player1FinalTurnDone: boolean;
@@ -178,7 +208,19 @@ export interface GameState {
   player2Suit: StandardSuit | null;
   flipResult: FlipResult | null;
   fieldControlSuit: StandardSuit | null;
-  pendingResolutionLanes: PendingLaneResolution[];
+  // v7 Cycling Lane Flow
+  // - laneCommunityCards: per-lane community card. Refreshed (discarded + redrawn from sharedDeck)
+  //   every time that lane resolves, so a single round can cycle through several community cards
+  //   per lane.
+  // - allLaneCommunityCard: only refreshed at round end (when both players' hands are empty),
+  //   not on individual lane resolutions.
+  // - pendingRoundEndLanes: queue of lanes that still need to play their resolution animation
+  //   during EndOfRoundResolving phase. Drained one lane at a time so the UI can show each
+  //   lane's damage/animation sequentially before starting the next round.
+  laneCommunityCards: Record<LaneId, Card | null>;
+  allLaneCommunityCard: Card | null;
+  pendingRoundEndLanes: LaneId[];
+  laneRelicEffects: Record<LaneId, LaneRelicEffects>;
   // Support ability tracking
   player1LanesLost: number;
   player2LanesLost: number;
@@ -188,13 +230,16 @@ export interface GameState {
   localPlayer: CurrentPlayer | null; // Which player you are (1 = host, 2 = guest)
   isHost: boolean;
   roomCode: string | null;
+  onlineMatchId: string | null;
+  onlineSessionToken: string | null;
+  onlineLastSequence: number;
+  onlineConnectionStatus: OnlineConnectionStatus;
   // Lane resolution animation
   lastLaneResolution: LaneResolutionResult | null;
   // v2 Ability System
   neutralizedLanes: Record<LaneId, boolean>; // Clubs 7-10/Ace: lane ignores ALL suit effects until next resolve
   pendingEffectChoices: EffectChoice[];      // Queue of player choices to resolve
   overkillThisTurn: number;                  // Hearts King: tracks overkill damage for healing conversion
-  laneDelayedUntilTurn: Record<LaneId, boolean>; // Clubs Queen: lane skips next auto-resolve
 }
 
 

@@ -7,16 +7,18 @@
  * - Bottom: Player avatar/HP + Player hand
  */
 
-import { useReducer, useEffect, useState, useCallback, useRef } from 'react'
+import { useReducer, useEffect, useState, useCallback, useRef, useLayoutEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { gameReducer, canPlayCardToLane, canEndTurn, executeAITurn, getAIEffectChoice } from '../game'
 import { initializeNewGame } from '../game/state'
-import { calculateBaseSum, evaluateLaneBonus } from '../game/poker'
-import type { LaneId, Lane, StandardSuit, GameMode, CurrentPlayer } from '../game/types'
+import { getLaneDisplay } from '../game/poker'
+import type { Card, CurrentPlayer, LaneId, Lane, RelicType, StandardSuit, GameMode } from '../game/types'
 import { CardView } from './CardView'
 import { EffectChoiceModal, StatusIndicators, ChargesDisplay } from './EffectChoiceModal'
 import * as Network from '../network/peer'
 import * as Lobbies from '../network/supabase'
 import type { Lobby } from '../network/supabase'
+import * as Matches from '../network/matches'
 
 // Suit to folder name mapping
 const SUIT_FOLDER_MAP: Record<StandardSuit, string> = {
@@ -40,19 +42,41 @@ function getAvatarPath(suit: StandardSuit | null): string {
   return `/assets/cards/Avatars and Supports/${SUIT_FOLDER_MAP[suit]}_Avatar.png`
 }
 
-// Get support path for a suit
-function getSupportPath(suit: StandardSuit | null): string {
-  if (!suit) return '/assets/cards/Avatars and Supports/Hearts_Support.png'
-  return `/assets/cards/Avatars and Supports/${SUIT_FOLDER_MAP[suit]}_Support.png`
+type BoardSelectionMode =
+  | 'move-source'
+  | 'move-target'
+  | 'neutralize'
+  | 'relic-shield-lane'
+  | 'relic-sword-lane'
+  | 'relic-skull-card'
+  | 'relic-skull-target'
+
+type MinionMenuMode = 'clubs-card' | 'clubs-suit' | 'diamonds-card'
+
+const SUIT_OPTIONS: { suit: StandardSuit; emoji: string; label: string }[] = [
+  { suit: 'hearts', emoji: '♥️', label: 'Hearts' },
+  { suit: 'diamonds', emoji: '♦️', label: 'Diamonds' },
+  { suit: 'clubs', emoji: '♣️', label: 'Clubs' },
+  { suit: 'spades', emoji: '♠️', label: 'Spades' },
+]
+
+function relicAssetName(relic: RelicType): string {
+  return relic[0].toUpperCase() + relic.slice(1)
 }
 
-// Get relic path for a suit (inactive for now; active variants reserved for future functionality)
-function getRelicPath(suit: StandardSuit | null, relic: 'skull' | 'sword', isActive = false): string {
+// Get relic path for a suit (inactive suit variants; active variants reserved for future functionality)
+function getRelicPath(suit: StandardSuit | null, relic: RelicType, isActive = false): string {
+  const relicName = relicAssetName(relic)
   if (isActive) {
-    return `/assets/cards/Avatars and Supports/Relics/Active_Relic_${relic === 'skull' ? 'Skull' : 'Sword'}.png`
+    return `/assets/cards/Avatars and Supports/Relics/Active_Relic_${relicName}.png`
   }
   const suitFolder = suit ? SUIT_FOLDER_MAP[suit] : 'Hearts'
-  return `/assets/cards/Avatars and Supports/Relics/${suitFolder}_Relic_${relic === 'skull' ? 'Skull' : 'Sword'}.png`
+  return `/assets/cards/Avatars and Supports/Relics/${suitFolder}_Relic_${relicName}.png`
+}
+
+function getMinionPath(suit: StandardSuit | null, isActive = false): string {
+  const suitName = suit ? SUIT_FOLDER_MAP[suit] : 'Hearts'
+  return `/assets/cards/Avatars and Supports/Minions/Minion_${suitName}_${isActive ? 'Active' : 'Inactive'}.png`
 }
 
 // Get background image based on field control suit
@@ -63,15 +87,13 @@ function getBackgroundImage(fieldControlSuit: StandardSuit | null): string {
   return '/assets/environment/Start_Play_ENV.png'
 }
 
-const DISCARD_BACK = '/assets/cards/Draw and Discard Cards/Card Back - Discard.png'
-
 export function GameBoard() {
   const [state, dispatch] = useReducer(gameReducer, undefined, initializeNewGame)
+  const stateRef = useRef(state)
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null)
   const [isAIThinking, setIsAIThinking] = useState(false)
   const aiExecutingRef = useRef(false)
   const [flipAnimationStage, setFlipAnimationStage] = useState<'cards' | 'result' | 'damage'>('cards')
-  const [aiSupportGlowing, setAISupportGlowing] = useState(false)
   
   // HP animation state - track previous HP to show damage/heal animation
   const [player1DisplayHP, setPlayer1DisplayHP] = useState(state.player1.hp)
@@ -107,8 +129,11 @@ export function GameBoard() {
   // 'move-source': Selecting which lane to pick the top card from
   // 'move-target': Selecting which lane to move the card to (after source selected)
   // 'neutralize': Selecting which lane to neutralize
-  const [boardSelectionMode, setBoardSelectionMode] = useState<'move-source' | 'move-target' | 'neutralize' | null>(null)
+  const [boardSelectionMode, setBoardSelectionMode] = useState<BoardSelectionMode | null>(null)
   const [moveSourceLane, setMoveSourceLane] = useState<LaneId | null>(null)
+  const [selectedRelicCard, setSelectedRelicCard] = useState<{ cardId: string; fromLane: LaneId } | null>(null)
+  const [minionMenuMode, setMinionMenuMode] = useState<MinionMenuMode | null>(null)
+  const [selectedMinionCardId, setSelectedMinionCardId] = useState<string | null>(null)
   
   // Online multiplayer state
   const [joinRoomCode, setJoinRoomCode] = useState('')
@@ -118,6 +143,11 @@ export function GameBoard() {
   const [activeLobbies, setActiveLobbies] = useState<Lobby[]>([])
   const [isLoadingLobbies, setIsLoadingLobbies] = useState(false)
   const [showManualCode, setShowManualCode] = useState(false)
+  const [opponentDisconnected, setOpponentDisconnected] = useState(false)
+
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
 
   // Determine if it's "your" turn based on game mode
   const isPlayerTurn = state.currentPlayer === 1
@@ -126,6 +156,12 @@ export function GameBoard() {
     : state.gameMode === 'vs-player'
       ? true  // Hotseat: always "local" since both players share the device
       : isPlayerTurn
+
+  const getActingPlayer = (): CurrentPlayer => {
+    if (state.gameMode === 'online') return state.localPlayer ?? 1
+    if (state.gameMode === 'vs-player') return state.currentPlayer
+    return 1
+  }
   
   // In PvP/online mode, ignore AI-thinking lock entirely.
   // This prevents stale AI flags from blocking input after turn changes.
@@ -153,24 +189,12 @@ export function GameBoard() {
     setDraggingCardId(null)
     setShowDragGhost(false)
     draggingCardRef.current = null
+    setBoardSelectionMode(null)
+    setMoveSourceLane(null)
+    setSelectedRelicCard(null)
+    setMinionMenuMode(null)
+    setSelectedMinionCardId(null)
   }, [state.currentPlayer, state.phase])
-
-  // Handler for player using support ability
-  const handlePlayerUseSupport = () => {
-    // Determine which player the "local" player is (the one at the bottom of the screen)
-    const isOnlineGuest = state.gameMode === 'online' && state.localPlayer === 2
-    const isHotseatP2Turn = state.gameMode === 'vs-player' && state.currentPlayer === 2
-    const shouldFlipPerspective = isOnlineGuest || isHotseatP2Turn
-    
-    const playerNum: CurrentPlayer = shouldFlipPerspective ? 2 : 1
-    const supportAvailable = playerNum === 1 ? state.player1SupportAvailable : state.player2SupportAvailable
-    
-    if (supportAvailable && state.phase === 'Main') {
-      const action = { type: 'USE_SUPPORT' as const, player: playerNum }
-      dispatch(action)
-      sendNetworkAction(action)
-    }
-  }
 
   // v2 Effect Choice Handlers
   const handleClubsReplace = (handCardId: string, replacementRank: 'J' | 'Q' | 'K') => {
@@ -210,12 +234,6 @@ export function GameBoard() {
   }
 
   // v2.2 new handlers
-  const handleHeartsAce = (choice: 'regen' | 'regenEffect') => {
-    const action = { type: 'EFFECT_CHOICE_HEARTS_ACE' as const, choice }
-    dispatch(action)
-    sendNetworkAction(action)
-  }
-
   const handleSpadesAce = (choice: 'bloodDebt' | 'bleed') => {
     const action = { type: 'EFFECT_CHOICE_SPADES_ACE' as const, choice }
     dispatch(action)
@@ -232,6 +250,110 @@ export function GameBoard() {
     const action = { type: 'SPEND_DIAMOND_CHARGE' as const, choice }
     dispatch(action)
     sendNetworkAction(action)
+  }
+
+  const cancelBoardSelection = () => {
+    setBoardSelectionMode(null)
+    setMoveSourceLane(null)
+    setSelectedRelicCard(null)
+  }
+
+  const canUseRelic = (relic: RelicType): boolean => {
+    if (state.phase !== 'Main' || !isLocalPlayerTurn || aiLockActive) return false
+    const player = getActingPlayer()
+    if (state.gameMode === 'vs-ai' && player !== 1) return false
+    const playerState = player === 1 ? state.player1 : state.player2
+    return playerState.relicsAvailable[relic]
+  }
+
+  const canUseMinion = (): boolean => {
+    if (state.phase !== 'Main' || !isLocalPlayerTurn || aiLockActive || boardSelectionMode || minionMenuMode) return false
+    const player = getActingPlayer()
+    if (state.gameMode === 'vs-ai' && player !== 1) return false
+    const playerState = player === 1 ? state.player1 : state.player2
+    return playerState.minionAvailable
+  }
+
+  const closeMinionMenu = () => {
+    setMinionMenuMode(null)
+    setSelectedMinionCardId(null)
+  }
+
+  const handleMinionClick = () => {
+    if (!canUseMinion()) return
+    const player = getActingPlayer()
+    const playerState = player === 1 ? state.player1 : state.player2
+    const playerSuit = player === 1 ? state.player1Suit : state.player2Suit
+    if (!playerSuit || playerState.hand.length === 0) return
+
+    setSelectedCardId(null)
+    setDraggingCardId(null)
+    closeMinionMenu()
+
+    if (playerSuit === 'spades' || playerSuit === 'hearts') {
+      const targetCard = playerState.hand[Math.floor(Math.random() * playerState.hand.length)]
+      const action = { type: 'USE_MINION_RANDOM_BUFF' as const, player, cardId: targetCard.id }
+      dispatch(action)
+      sendNetworkAction(action)
+      return
+    }
+
+    if (playerSuit === 'clubs') {
+      setMinionMenuMode('clubs-card')
+      return
+    }
+
+    const rankableCards = playerState.hand.filter(card => card.rank !== 'JOKER')
+    if (rankableCards.length > 0) {
+      setMinionMenuMode('diamonds-card')
+    }
+  }
+
+  const handleMinionClubsCardSelect = (cardId: string) => {
+    setSelectedMinionCardId(cardId)
+    setMinionMenuMode('clubs-suit')
+  }
+
+  const handleMinionSuitSelect = (suit: StandardSuit) => {
+    if (!selectedMinionCardId) return
+    const action = { type: 'USE_MINION_CLUBS_CHANGE_SUIT' as const, player: getActingPlayer(), cardId: selectedMinionCardId, suit }
+    dispatch(action)
+    sendNetworkAction(action)
+    closeMinionMenu()
+  }
+
+  const handleMinionDiamondsCardSelect = (cardId: string) => {
+    const action = { type: 'USE_MINION_DIAMONDS_RANK_UP' as const, player: getActingPlayer(), cardId }
+    dispatch(action)
+    sendNetworkAction(action)
+    closeMinionMenu()
+  }
+
+  const handleRelicClick = (relic: RelicType) => {
+    if (!canUseRelic(relic)) return
+    setSelectedCardId(null)
+    setDraggingCardId(null)
+    setSelectedRelicCard(null)
+    setMoveSourceLane(null)
+    if (relic === 'shield') {
+      setBoardSelectionMode('relic-shield-lane')
+    } else if (relic === 'sword') {
+      setBoardSelectionMode('relic-sword-lane')
+    } else {
+      setBoardSelectionMode('relic-skull-card')
+    }
+  }
+
+  const handleRelicCardSelect = (card: Card, fromLane: LaneId) => {
+    if (boardSelectionMode !== 'relic-skull-card') return
+    const player = getActingPlayer()
+    const lane = state.lanes.find(l => l.id === fromLane)
+    if (!lane) return
+    const ownCards = player === 1 ? lane.player1.cards : lane.player2.cards
+    if (!ownCards.some(c => c.id === card.id)) return
+
+    setSelectedRelicCard({ cardId: card.id, fromLane })
+    setBoardSelectionMode('relic-skull-target')
   }
 
   const handleDismissEffectChoice = () => {
@@ -254,12 +376,52 @@ export function GameBoard() {
   
   // Handle board selection clicks
   const handleBoardSelectionClick = (laneId: LaneId) => {
+    if (boardSelectionMode === 'relic-shield-lane') {
+      const player = getActingPlayer()
+      const action = { type: 'USE_RELIC_SHIELD' as const, player, laneId }
+      dispatch(action)
+      sendNetworkAction(action)
+      cancelBoardSelection()
+      return
+    }
+
+    if (boardSelectionMode === 'relic-sword-lane') {
+      const player = getActingPlayer()
+      const action = { type: 'USE_RELIC_SWORD' as const, player, laneId }
+      dispatch(action)
+      sendNetworkAction(action)
+      cancelBoardSelection()
+      return
+    }
+
+    if (boardSelectionMode === 'relic-skull-target' && selectedRelicCard) {
+      if (laneId === selectedRelicCard.fromLane) return
+
+      const player = getActingPlayer()
+      const lane = state.lanes.find(l => l.id === laneId)
+      if (!lane) return
+      const ownTargetCards = player === 1 ? lane.player1.cards : lane.player2.cards
+      if (ownTargetCards.length >= 3) return
+
+      const action = {
+        type: 'USE_RELIC_SKULL' as const,
+        player,
+        cardId: selectedRelicCard.cardId,
+        fromLane: selectedRelicCard.fromLane,
+        toLane: laneId,
+      }
+      dispatch(action)
+      sendNetworkAction(action)
+      cancelBoardSelection()
+      return
+    }
+
     if (boardSelectionMode === 'neutralize') {
       // Neutralize this lane
       if (!state.neutralizedLanes[laneId]) {
         handleClubsNeutralize(laneId)
       }
-      setBoardSelectionMode(null)
+      cancelBoardSelection()
       return
     }
     
@@ -301,8 +463,7 @@ export function GameBoard() {
       
       // Execute the move
       handleClubsMove(topCard.id, moveSourceLane, laneId)
-      setBoardSelectionMode(null)
-      setMoveSourceLane(null)
+      cancelBoardSelection()
       return
     }
   }
@@ -499,7 +660,13 @@ export function GameBoard() {
 
       // Stage 3: Continue to main phase (1s more)
       const timer3 = setTimeout(() => {
-        dispatch({ type: 'CONTINUE_FROM_FLIP' })
+        if (state.gameMode === 'online' && !state.isHost) return
+        const action = { type: 'CONTINUE_FROM_FLIP' as const }
+        dispatch(action)
+        if (state.gameMode === 'online' && Network.isConnected()) {
+          Network.sendAction({ type: 'GAME_ACTION', action })
+          dispatch({ type: 'SET_ONLINE_SEQUENCE', sequence: Network.getOutgoingSequence() })
+        }
       }, 4000)
 
       return () => {
@@ -519,16 +686,6 @@ export function GameBoard() {
     setIsAIThinking(true)
     
     try {
-      // Check if AI should use support ability (use it at start of turn if available)
-      if (state.player2SupportAvailable) {
-        // Show glow effect for 1.5 seconds before using
-        setAISupportGlowing(true)
-        await new Promise(r => setTimeout(r, 1500))
-        dispatch({ type: 'USE_SUPPORT', player: 2 })
-        setAISupportGlowing(false)
-        await new Promise(r => setTimeout(r, 500))
-      }
-      
       await new Promise(r => setTimeout(r, 800))
       const moves = executeAITurn(state)
       
@@ -536,9 +693,8 @@ export function GameBoard() {
         await new Promise(r => setTimeout(r, 400))
         if (move.type === 'lane' && move.laneId) {
           dispatch({ type: 'PLAY_CARD_TO_LANE', cardId: move.cardId, laneId: move.laneId })
-        } else {
-          dispatch({ type: 'DISCARD_CARD', cardId: move.cardId })
         }
+        // v4 Shared Deck: AI no longer emits discard moves. Any non-lane move is a no-op.
       }
       
       await new Promise(r => setTimeout(r, 300))
@@ -576,16 +732,75 @@ export function GameBoard() {
     return () => clearTimeout(timeoutId)
   }, [state.gameMode, state.pendingEffectChoices])
 
-  // Auto-resolve end of round
+  // v7 Cycling Lane Flow: end-of-round sequential resolution.
+  //
+  // We enter EndOfRoundResolving the moment both players' hands are empty.
+  // The reducer seeds `pendingRoundEndLanes` with every lane that still has
+  // cards on the board. The UI is responsible for pacing:
+  //
+  //   1. While the queue still has lanes, wait for the previous lane's
+  //      resolution overlay to finish (~3500ms), then dispatch
+  //      RESOLVE_NEXT_END_OF_ROUND_LANE - the reducer pops the next lane and
+  //      runs resolveLane on it, which writes a fresh `lastLaneResolution`
+  //      and triggers the overlay animation.
+  //   2. Once the queue is empty, wait one more animation cycle for the last
+  //      lane to finish playing, then dispatch FINALIZE_ROUND_END to start
+  //      the next round (War Flip / fresh deal).
+  //
+  // RESOLVE_NEXT_END_OF_ROUND_LANE is fully deterministic, so both clients
+  // can dispatch it locally in online mode and stay in sync. FINALIZE_ROUND_END
+  // calls startNewRound which shuffles - that one is host-only; the guest
+  // picks up the resulting state via the existing FLIP_RESULT_SYNC pipeline
+  // once the host transitions into InitialFlipResult.
   useEffect(() => {
-    if (state.phase === 'EndOfRoundResolving') {
-      setTimeout(() => dispatch({ type: 'RESOLVE_END_OF_ROUND' }), 500)
+    if (state.phase !== 'EndOfRoundResolving') return
+    if (state.gameMode === 'online' && !state.isHost) return
+
+    const ROUND_END_DELAY_MS = 3700
+
+    if (state.pendingRoundEndLanes.length > 0) {
+      const timeoutId = setTimeout(() => {
+        const action = { type: 'RESOLVE_NEXT_END_OF_ROUND_LANE' as const }
+        dispatch(action)
+        if (state.gameMode === 'online' && Network.isConnected()) {
+          Network.sendAction({ type: 'GAME_ACTION', action })
+          dispatch({ type: 'SET_ONLINE_SEQUENCE', sequence: Network.getOutgoingSequence() })
+        }
+      }, ROUND_END_DELAY_MS)
+      return () => clearTimeout(timeoutId)
     }
-  }, [state.phase])
+
+    const timeoutId = setTimeout(() => {
+      const action = { type: 'FINALIZE_ROUND_END' as const }
+      dispatch(action)
+      if (state.gameMode === 'online' && Network.isConnected()) {
+        Network.sendAction({ type: 'GAME_ACTION', action })
+        dispatch({ type: 'SET_ONLINE_SEQUENCE', sequence: Network.getOutgoingSequence() })
+      }
+    }, ROUND_END_DELAY_MS)
+    return () => clearTimeout(timeoutId)
+  }, [state.phase, state.pendingRoundEndLanes.length, state.gameMode, state.isHost])
 
   // Network action handler for online mode
   const handleNetworkAction = useCallback((action: any) => {
     console.log('[GameBoard] Received network action:', action.type, action.action?.type)
+
+    if (action.type === 'SNAPSHOT_REQUESTED') {
+      const latestState = stateRef.current
+      if (latestState.isHost && latestState.onlineMatchId) {
+        Matches.persistSnapshot(latestState.onlineMatchId, latestState, latestState.onlineLastSequence)
+        Network.sendAction({ type: 'STATE_SYNC', state: latestState, reason: action.reason })
+      }
+      return
+    }
+
+    if (action.type === 'REQUEST_SNAPSHOT') {
+      const latestState = stateRef.current
+      if (latestState.isHost) {
+        Network.sendAction({ type: 'STATE_SYNC', state: latestState, reason: action.reason ?? 'requested' })
+      }
+      return
+    }
     
     // Handle incoming game actions from opponent
     if (action.type === 'GAME_ACTION') {
@@ -616,6 +831,9 @@ export function GameBoard() {
     // Handle state sync (for guest joining)
     if (action.type === 'STATE_SYNC') {
       dispatch({ type: 'SYNC_STATE', state: action.state })
+      if (typeof action.sequence === 'number') {
+        dispatch({ type: 'SET_ONLINE_SEQUENCE', sequence: action.sequence })
+      }
     }
     
     // Handle flip result sync from host (fixes war flip desync between clients)
@@ -629,16 +847,98 @@ export function GameBoard() {
   useEffect(() => {
     if (state.gameMode === 'online') {
       Network.onAction(handleNetworkAction)
+      Network.onPresence((presenceState) => {
+        const entries = Object.values((presenceState || {}) as Record<string, unknown[]>).flat()
+        if (entries.length >= 2) {
+          setOpponentDisconnected(false)
+          dispatch({ type: 'SET_ONLINE_CONNECTION_STATUS', status: 'connected' })
+        }
+      })
     }
     return () => {
       // Cleanup handled by disconnect
     }
   }, [state.gameMode, handleNetworkAction])
 
+  useEffect(() => {
+    if (
+      state.gameMode !== 'online' ||
+      !state.isHost ||
+      !state.onlineMatchId ||
+      state.onlineConnectionStatus === 'offline'
+    ) {
+      return
+    }
+
+    const timeoutId = setTimeout(() => {
+      Matches.persistSnapshot(state.onlineMatchId, state, state.onlineLastSequence)
+    }, 250)
+
+    return () => clearTimeout(timeoutId)
+  }, [state])
+
+  useEffect(() => {
+    if (
+      state.gameMode !== 'online' ||
+      !state.isHost ||
+      !state.roomCode ||
+      !state.onlineSessionToken ||
+      state.phase !== 'WaitingForPlayer'
+    ) {
+      return
+    }
+
+    const roomCode = state.roomCode
+    const sessionToken = state.onlineSessionToken
+    const intervalId = setInterval(() => {
+      Matches.heartbeatLobby(roomCode, sessionToken)
+    }, 20_000)
+
+    Matches.heartbeatLobby(roomCode, sessionToken)
+    return () => clearInterval(intervalId)
+  }, [state.gameMode, state.isHost, state.roomCode, state.onlineSessionToken, state.phase])
+
+  useEffect(() => {
+    if (state.gameMode !== 'online' || !state.onlineMatchId || !state.onlineSessionToken || !state.localPlayer) {
+      return
+    }
+
+    const session: Matches.OnlineSession = {
+      matchId: state.onlineMatchId,
+      roomCode: state.roomCode ?? '',
+      playerSlot: state.localPlayer,
+      sessionToken: state.onlineSessionToken,
+      isHost: state.isHost,
+    }
+
+    const markDisconnected = () => {
+      Matches.markPlayerDisconnected(session)
+    }
+
+    const touch = () => {
+      if (document.visibilityState === 'visible') {
+        Matches.touchPlayer(session)
+      } else {
+        markDisconnected()
+      }
+    }
+
+    window.addEventListener('pagehide', markDisconnected)
+    window.addEventListener('beforeunload', markDisconnected)
+    document.addEventListener('visibilitychange', touch)
+
+    return () => {
+      window.removeEventListener('pagehide', markDisconnected)
+      window.removeEventListener('beforeunload', markDisconnected)
+      document.removeEventListener('visibilitychange', touch)
+    }
+  }, [state.gameMode, state.onlineMatchId, state.onlineSessionToken, state.localPlayer, state.isHost, state.roomCode])
+
   // Send game actions over network in online mode
   const sendNetworkAction = useCallback((action: any) => {
     if (state.gameMode === 'online' && Network.isConnected()) {
       Network.sendAction({ type: 'GAME_ACTION', action })
+      dispatch({ type: 'SET_ONLINE_SEQUENCE', sequence: Network.getOutgoingSequence() })
     }
   }, [state.gameMode])
 
@@ -649,27 +949,67 @@ export function GameBoard() {
     
     // Force cleanup any stale connections before creating
     Network.forceCleanup()
+    Network.onAction(handleNetworkAction)
     
     try {
       const code = await Network.createRoom()
       dispatch({ type: 'SET_ROOM_CODE', code })
       dispatch({ type: 'GO_TO_CREATE_ROOM' })
       
-      // Register lobby in database (if Supabase is configured)
-      await Lobbies.createLobby(code, 'Player 1')
+      const session = await Matches.createMatchBackedLobby(code, 'Player 1', {
+        ...stateRef.current,
+        roomCode: code,
+        gameMode: 'online',
+        localPlayer: 1,
+        isHost: true,
+      })
+      if (session) {
+        dispatch({
+          type: 'SET_ONLINE_SESSION',
+          matchId: session.matchId,
+          sessionToken: session.sessionToken,
+          player: 1,
+          isHost: true,
+          roomCode: code,
+        })
+        Network.configureSession({
+          matchId: session.matchId,
+          playerSlot: 1,
+          sessionToken: session.sessionToken,
+          resetSequence: true,
+        })
+        Network.trackPresence()
+        Matches.saveResumeMetadata(session)
+      } else {
+        // Register legacy lobby if the durable schema has not been installed yet.
+        await Lobbies.createLobby(code, 'Player 1')
+      }
       
       // When guest connects, move to suit selection
       Network.onConnection(() => {
         // Remove lobby from list since game is starting
+        Matches.closeLobby(code, stateRef.current.onlineSessionToken)
         Lobbies.removeLobby(code)
         dispatch({ type: 'PLAYER_CONNECTED' })
         // Sync current state to guest
-        Network.sendAction({ type: 'STATE_SYNC', state: { ...state, phase: 'SuitSelection', gameMode: 'online', isHost: false, localPlayer: 2 } })
+        const latestState = {
+          ...stateRef.current,
+          phase: 'SuitSelection' as const,
+          gameMode: 'online' as const,
+          isHost: false,
+          localPlayer: 2 as CurrentPlayer,
+        }
+        Network.sendAction({
+          type: 'STATE_SYNC',
+          state: latestState,
+          sequence: Network.getOutgoingSequence(),
+        })
       })
       
       // Remove lobby on disconnect
       Network.onDisconnect(() => {
-        Lobbies.removeLobby(code)
+        setOpponentDisconnected(true)
+        dispatch({ type: 'SET_ONLINE_CONNECTION_STATUS', status: 'opponent-disconnected' })
       })
     } catch (err: any) {
       setConnectionError(err.message || 'Failed to create room. Please try again.')
@@ -689,10 +1029,35 @@ export function GameBoard() {
     
     // Force cleanup any stale connections before joining
     Network.forceCleanup()
+    Network.onAction(handleNetworkAction)
     
     try {
-      await Network.joinRoom(roomCode.toUpperCase())
-      dispatch({ type: 'SET_ROOM_CODE', code: roomCode.toUpperCase() })
+      const cleanCode = roomCode.toUpperCase()
+      const session = await Matches.joinMatchBackedLobby(cleanCode)
+      if (session) {
+        dispatch({
+          type: 'SET_ONLINE_SESSION',
+          matchId: session.matchId,
+          sessionToken: session.sessionToken,
+          player: 2,
+          isHost: false,
+          roomCode: cleanCode,
+        })
+        Network.configureSession({
+          matchId: session.matchId,
+          playerSlot: 2,
+          sessionToken: session.sessionToken,
+          resetSequence: true,
+        })
+        Matches.saveResumeMetadata(session)
+      } else {
+        const lobby = await Matches.getLobbyByRoomCode(cleanCode)
+        if (lobby && !Matches.isLobbyFresh(lobby)) {
+          throw new Error('That room has expired. Please ask the host to create a new room.')
+        }
+      }
+      await Network.joinRoom(cleanCode)
+      dispatch({ type: 'SET_ROOM_CODE', code: cleanCode })
       // Guest is player 2, transition handled by state sync from host
     } catch (err: any) {
       setConnectionError(err.message || 'Failed to join room. Check the code and try again.')
@@ -740,6 +1105,7 @@ export function GameBoard() {
       // In online mode, send suit selection to opponent
       if (state.gameMode === 'online' && Network.isConnected()) {
         Network.sendAction({ type: 'SUIT_SELECTED', suit })
+        dispatch({ type: 'SET_ONLINE_SEQUENCE', sequence: Network.getOutgoingSequence() })
       }
     }
   }
@@ -757,6 +1123,7 @@ export function GameBoard() {
   }
 
   const handleCardClick = (cardId: string) => {
+    if (boardSelectionMode || minionMenuMode) return
     if (!canAct) return
     setSelectedCardId(prev => prev === cardId ? null : cardId)
   }
@@ -777,14 +1144,6 @@ export function GameBoard() {
     setSelectedCardId(null)
   }
 
-  const handleDiscard = () => {
-    if (!selectedCardId || !canAct) return
-    const action = { type: 'DISCARD_CARD' as const, cardId: selectedCardId }
-    dispatch(action)
-    sendNetworkAction(action)
-    setSelectedCardId(null)
-  }
-
   const handleEndTurn = () => {
     // Only the current player can end their turn
     if (!canEndTurn(state)) return
@@ -796,10 +1155,19 @@ export function GameBoard() {
   }
 
   const handleSuddenDeath = () => {
-    if (state.phase === 'SuddenDeath') dispatch({ type: 'SUDDEN_DEATH_STEP' })
+    if (state.phase !== 'SuddenDeath') return
+    if (state.gameMode === 'online' && !state.isHost) {
+      Network.sendAction({ type: 'REQUEST_SNAPSHOT', reason: 'guest-sudden-death-waiting-for-host' })
+      return
+    }
+    const action = { type: 'SUDDEN_DEATH_STEP' as const }
+    dispatch(action)
+    sendNetworkAction(action)
   }
 
   const handleNewGame = () => {
+    Matches.clearResumeMetadata()
+    Network.forceCleanup()
     dispatch({ type: 'START_NEW_GAME' })
     setSelectedCardId(null)
   }
@@ -822,14 +1190,9 @@ export function GameBoard() {
     return laneEl?.getAttribute('data-lane-id') as LaneId | null
   }
 
-  // Check if discard pile is under a point
-  const isDiscardUnderPoint = (x: number, y: number): boolean => {
-    const element = document.elementFromPoint(x, y)
-    return element?.closest('.discard-pile') !== null
-  }
-
   // Drag handlers for desktop (HTML5 Drag API)
   const handleDragStart = (e: React.DragEvent, cardId: string, card: any, ownerSuit: StandardSuit | null) => {
+    if (boardSelectionMode || minionMenuMode) return
     if (!canAct) return
     setDraggingCardId(cardId)
     setSelectedCardId(null) // Deselect when starting drag
@@ -899,21 +1262,9 @@ export function GameBoard() {
     handleDragEnd()
   }
 
-  const handleDragOverDiscard = (e: React.DragEvent) => {
-    e.preventDefault()
-  }
-
-  const handleDropOnDiscard = () => {
-    if (!draggingCardId || !canAct) return
-    
-    const action = { type: 'DISCARD_CARD' as const, cardId: draggingCardId }
-    dispatch(action)
-    sendNetworkAction(action)
-    handleDragEnd()
-  }
-
   // Touch handlers for mobile - use direct DOM manipulation for ghost position to avoid re-renders
   const handleTouchStart = (e: React.TouchEvent, cardId: string, card: any, ownerSuit: StandardSuit | null) => {
+    if (boardSelectionMode || minionMenuMode) return
     if (!canAct) return
     e.preventDefault() // Prevent default to avoid scroll during drag
     
@@ -968,40 +1319,28 @@ export function GameBoard() {
     // Get the final position
     const touch = e.changedTouches[0]
     const laneId = getLaneUnderPoint(touch.clientX, touch.clientY)
-    const isOverDiscard = isDiscardUnderPoint(touch.clientX, touch.clientY)
-    
+
     if (laneId && canPlayCardToLane(state, draggingCardId, laneId)) {
       const action = { type: 'PLAY_CARD_TO_LANE' as const, cardId: draggingCardId, laneId }
       dispatch(action)
       sendNetworkAction(action)
-    } else if (isOverDiscard) {
-      const action = { type: 'DISCARD_CARD' as const, cardId: draggingCardId }
-      dispatch(action)
-      sendNetworkAction(action)
     }
     // If not dropped on valid target, card returns to hand (nothing happens)
-    
-    handleDragEnd()
-  }
 
-  // Get pending resolution info for a lane
-  const getPendingInfo = (laneId: LaneId) => {
-    return state.pendingResolutionLanes.find(p => p.laneId === laneId)
+    handleDragEnd()
   }
 
   // Lane component - with perspective flip for online AND hotseat mode
   const LaneView = ({ lane }: { lane: Lane }) => {
+    const laneCommunityCard = state.laneCommunityCards[lane.id]
+    const laneLocked = state.phase === 'Main' && !laneCommunityCard
     const targetable = isLaneTargetable(lane.id)
     const dropTarget = isLaneDropTarget(lane.id)
-    const labels: Record<string, string> = { left: 'Left', middle: 'Mid', right: 'Right' }
-    const pendingInfo = getPendingInfo(lane.id)
-    
-    // Determine glow class based on turns until resolution
-    const glowClass = pendingInfo 
-      ? pendingInfo.turnsUntilResolution === 2 
-        ? 'lane-glow-warning' 
-        : 'lane-glow-danger'
-      : ''
+    // Per-lane community poker card slot id (middle -> "mid" per game design)
+    const communitySlotId = `${lane.id === 'middle' ? 'mid' : lane.id}_community_poker_card`
+
+    // v7 Cycling Lane Flow: lanes no longer lock; no glow needed.
+    const glowClass = ''
     
     // Board selection mode classes
     const isMoveSource = moveSourceLane === lane.id
@@ -1010,7 +1349,7 @@ export function GameBoard() {
     // Determine if lane is selectable in current board selection mode
     let selectionSelectable = false
     let selectionClass = ''
-    if (boardSelectionMode === 'neutralize' && !isNeutralized) {
+    if (boardSelectionMode === 'neutralize' && !isNeutralized && !laneLocked) {
       selectionSelectable = true
       selectionClass = 'lane-selection-neutralize'
     } else if (boardSelectionMode === 'move-source') {
@@ -1024,9 +1363,29 @@ export function GameBoard() {
           selectionClass = 'lane-selection-move-source'
         }
       }
-    } else if (boardSelectionMode === 'move-target' && !isMoveSource) {
+    } else if (boardSelectionMode === 'move-target' && !isMoveSource && !laneLocked) {
       selectionSelectable = true
       selectionClass = 'lane-selection-move-target'
+    } else if (boardSelectionMode === 'relic-shield-lane' && !laneLocked) {
+      selectionSelectable = true
+      selectionClass = 'lane-selection-relic-shield'
+    } else if (boardSelectionMode === 'relic-sword-lane' && !laneLocked) {
+      selectionSelectable = true
+      selectionClass = 'lane-selection-relic-sword'
+    } else if (boardSelectionMode === 'relic-skull-card') {
+      const player = getActingPlayer()
+      const ownCards = player === 1 ? lane.player1.cards : lane.player2.cards
+      if (ownCards.length > 0) {
+        selectionSelectable = true
+        selectionClass = 'lane-selection-relic-skull-source'
+      }
+    } else if (boardSelectionMode === 'relic-skull-target' && selectedRelicCard && lane.id !== selectedRelicCard.fromLane && !laneLocked) {
+      const player = getActingPlayer()
+      const ownCards = player === 1 ? lane.player1.cards : lane.player2.cards
+      if (ownCards.length < 3) {
+        selectionSelectable = true
+        selectionClass = 'lane-selection-relic-skull-target'
+      }
     }
     
     // Note: drag-over visual is now handled via direct DOM class manipulation
@@ -1041,26 +1400,63 @@ export function GameBoard() {
     const bottomCards = shouldFlipPerspective ? lane.player2.cards : lane.player1.cards
     const topSuit = shouldFlipPerspective ? state.player1Suit : state.player2Suit
     const bottomSuit = shouldFlipPerspective ? state.player2Suit : state.player1Suit
+    const topPlayerKey = shouldFlipPerspective ? 'player1' : 'player2'
+    const bottomPlayerKey = shouldFlipPerspective ? 'player2' : 'player1'
+    const topRelicEffects = state.laneRelicEffects[lane.id][topPlayerKey]
+    const bottomRelicEffects = state.laneRelicEffects[lane.id][bottomPlayerKey]
     
-    // Calculate lane totals for display (base sum + poker bonus)
-    const topBaseSum = calculateBaseSum(topCards)
-    const topBonus = evaluateLaneBonus(topCards)
-    const bottomBaseSum = calculateBaseSum(bottomCards)
-    const bottomBonus = evaluateLaneBonus(bottomCards)
+    // v6 Poker Rework: lane total preview uses evaluateBestHand over
+    // player cards + per-lane community + all-lane community.
+    const allLaneCommunityCard = state.allLaneCommunityCard ?? null
+    const topDisplay = getLaneDisplay(topCards, laneCommunityCard ?? null, allLaneCommunityCard)
+    const bottomDisplay = getLaneDisplay(bottomCards, laneCommunityCard ?? null, allLaneCommunityCard)
+    const topBaseSum = topDisplay.baseSum
+    const topBonus = topDisplay.bonus
+    const bottomBaseSum = bottomDisplay.baseSum
+    const bottomBonus = bottomDisplay.bonus
+    const renderRelicIndicators = (
+      effects: { shielded: boolean; swordBonus: boolean },
+      side: 'opponent' | 'player',
+    ) => {
+      if (!effects.shielded && !effects.swordBonus) return null
+      return (
+        <div className={`lane-special-effects ${side}`}>
+          {effects.shielded && <span className="lane-special-effect shield" title="Shielded: 50% damage reduction">🛡️</span>}
+          {effects.swordBonus && <span className="lane-special-effect sword" title="Sword: double poker bonus">⚔️</span>}
+        </div>
+      )
+    }
 
     return (
       <div className="lane-wrapper">
-        {/* Opponent lane total (outside, above) */}
+        {renderRelicIndicators(topRelicEffects, 'opponent')}
+        {/* Opponent lane total (outside, above). The number row and the hand-label
+            are wrapped in their own boxes so the cell is a fixed-height flex
+            column - that way long hand labels (e.g. "3-Card Straight Flush"
+            wrapping to 2 lines) can't push the lane out of vertical alignment
+            with its neighbours. */}
         <div className={`lane-total opponent ${topBaseSum > 0 ? 'has-value' : ''}`}>
           {topBaseSum > 0 ? (
-            topBonus > 0 ? (
-              <><span className="base-sum">{topBaseSum}</span><span className="bonus-separator">|</span><span className="bonus-value">{topBonus}</span></>
-            ) : topBaseSum
-          ) : '—'}
+            <>
+              <div className="lane-total-number">
+                {topBonus > 0 ? (
+                  <><span className="base-sum">{topBaseSum}</span><span className="bonus-separator">|</span><span className="bonus-value">{topBonus}</span></>
+                ) : (
+                  <span className="base-sum">{topBaseSum}</span>
+                )}
+              </div>
+              <span className="hand-label">{topDisplay.handLabel}</span>
+            </>
+          ) : (
+            <>
+              <div className="lane-total-number"><span className="base-sum">—</span></div>
+              <span className="hand-label" aria-hidden="true">&nbsp;</span>
+            </>
+          )}
         </div>
         
         <div 
-          className={`lane ${targetable ? 'lane-targetable' : ''} ${dropTarget ? 'lane-drop-target' : ''} ${glowClass} ${selectionClass} ${isMoveSource ? 'lane-move-source' : ''}`}
+          className={`lane ${laneLocked ? 'lane-community-locked' : ''} ${targetable ? 'lane-targetable' : ''} ${dropTarget ? 'lane-drop-target' : ''} ${glowClass} ${selectionClass} ${isMoveSource ? 'lane-move-source' : ''}`}
           onClick={() => {
             if (selectionSelectable) {
               handleLaneClick(lane.id)
@@ -1074,117 +1470,398 @@ export function GameBoard() {
           onDrop={() => handleDropOnLane(lane.id)}
           style={{ cursor: selectionSelectable ? 'pointer' : undefined }}
         >
-          {/* Pending resolution indicator */}
-          {pendingInfo && (
-            <div className={`lane-pending-indicator ${pendingInfo.turnsUntilResolution === 1 ? 'urgent' : ''}`}>
-              Resolves in {pendingInfo.turnsUntilResolution}
-            </div>
-          )}
 
-          {/* Opponent cards (top) - stacked vertically, reversed so first card is closest to center */}
+          {/* Opponent cards (top) - stacked horizontally; each card overlaps the prior by 60%.
+              Later-played cards render on top (ascending z-index). */}
           <div className="lane-cards-stack opponent">
             {topCards.length === 0 ? (
               <div className="lane-empty">—</div>
             ) : (
-              [...topCards].reverse().map((card, renderIdx) => {
-                // Original index in the array (for lane context)
-                const originalIdx = topCards.length - 1 - renderIdx
-                // z-index: first played card (closest to center) should be on TOP visually
-                // renderIdx 0 = last played (furthest from center) = lowest z-index
-                // renderIdx 2 = first played (closest to center) = highest z-index
-                const zIndex = renderIdx + 1
-                return (
-                  <div key={card.id} className="stacked-card" style={{ zIndex }}>
-                    <CardView 
-                      card={card} 
-                      small 
-                      ownerSuit={topSuit}
-                      laneCards={topCards}
-                      cardIndexInLane={originalIdx}
-                    />
-                  </div>
-                )
-              })
-            )}
-          </div>
-
-        {/* Lane label */}
-        <div className="lane-label">
-          {labels[lane.id]}
-          {targetable && <span style={{ color: '#fbbf24' }}> ▼</span>}
-        </div>
-
-          {/* Local player cards (bottom) - stacked vertically */}
-          <div className="lane-cards-stack player">
-            {bottomCards.length === 0 ? (
-              <div className="lane-empty">—</div>
-            ) : (
-              bottomCards.map((card, idx) => (
-                <div key={card.id} className="stacked-card" style={{ zIndex: idx }}>
-                  <CardView 
-                    card={card} 
-                    small 
-                    ownerSuit={bottomSuit}
-                    laneCards={bottomCards}
+              topCards.map((card, idx) => (
+                <div key={card.id} className="stacked-card" style={{ zIndex: idx + 1 }}>
+                  <CardView
+                    card={card}
+                    small
+                    ownerSuit={topSuit}
+                    laneCards={topCards}
                     cardIndexInLane={idx}
                   />
                 </div>
               ))
             )}
           </div>
+
+        {/* Per-lane community poker card slot. v7 Cycling Lane Flow: this slot
+            is refreshed (discarded + redrawn from sharedDeck) every time the
+            lane resolves, so it can change multiple times within a single round. */}
+        <div
+          className={`community-poker-slot lane-community-slot ${laneLocked ? 'community-slot-locked' : ''}`}
+          data-slot-id={communitySlotId}
+          aria-label={communitySlotId}
+        >
+          {laneCommunityCard ? (
+            <CardView card={laneCommunityCard} small />
+          ) : laneLocked ? (
+            <span className="lane-lock-icon" aria-label="Lane locked">🔒</span>
+          ) : (
+            targetable && <span className="community-slot-arrow">▼</span>
+          )}
+        </div>
+
+          {/* Local player cards (bottom) - stacked horizontally; each card overlaps the prior by 60%.
+              Later-played cards render on top (ascending z-index). */}
+          <div className="lane-cards-stack player">
+            {bottomCards.length === 0 ? (
+              <div className="lane-empty">—</div>
+            ) : (
+              bottomCards.map((card, idx) => {
+                const isRelicCardSelectable = boardSelectionMode === 'relic-skull-card'
+                const isRelicCardSelected = selectedRelicCard?.cardId === card.id
+                return (
+                <div
+                  key={card.id}
+                  className={`stacked-card ${isRelicCardSelectable ? 'relic-card-selectable' : ''} ${isRelicCardSelected ? 'relic-card-selected' : ''}`}
+                  style={{ zIndex: idx + 1 }}
+                  onClick={(event) => {
+                    if (!isRelicCardSelectable) return
+                    event.stopPropagation()
+                    handleRelicCardSelect(card, lane.id)
+                  }}
+                >
+                  <CardView
+                    card={card}
+                    small
+                    selected={isRelicCardSelected}
+                    ownerSuit={bottomSuit}
+                    laneCards={bottomCards}
+                    cardIndexInLane={idx}
+                  />
+                </div>
+                )
+              })
+            )}
+          </div>
         </div>
         
-        {/* Player lane total (outside, below) */}
+        {/* Player lane total (outside, below). Same fixed-height layout as the
+            opponent total - long hand labels wrap inside the cell without
+            pushing the lane upward. */}
         <div className={`lane-total player ${bottomBaseSum > 0 ? 'has-value' : ''}`}>
           {bottomBaseSum > 0 ? (
-            bottomBonus > 0 ? (
-              <><span className="base-sum">{bottomBaseSum}</span><span className="bonus-separator">|</span><span className="bonus-value">{bottomBonus}</span></>
-            ) : bottomBaseSum
-          ) : '—'}
+            <>
+              <div className="lane-total-number">
+                {bottomBonus > 0 ? (
+                  <><span className="base-sum">{bottomBaseSum}</span><span className="bonus-separator">|</span><span className="bonus-value">{bottomBonus}</span></>
+                ) : (
+                  <span className="base-sum">{bottomBaseSum}</span>
+                )}
+              </div>
+              <span className="hand-label">{bottomDisplay.handLabel}</span>
+            </>
+          ) : (
+            <>
+              <div className="lane-total-number"><span className="base-sum">—</span></div>
+              <span className="hand-label" aria-hidden="true">&nbsp;</span>
+            </>
+          )}
         </div>
+        {renderRelicIndicators(bottomRelicEffects, 'player')}
       </div>
     )
   }
 
   // Avatar component with pentagonal frame
-  const Avatar = ({ suit, isPlayer, takingDamage = false, healing = false }: { suit: StandardSuit | null; isPlayer: boolean; takingDamage?: boolean; healing?: boolean }) => (
-    <div className={`avatar-frame ${isPlayer ? 'player' : 'opponent'} ${takingDamage ? 'taking-damage' : ''} ${healing ? 'healing' : ''}`}>
+  const Avatar = ({ suit, isPlayer, takingDamage = false, healing = false, isTurnActive = false }: { suit: StandardSuit | null; isPlayer: boolean; takingDamage?: boolean; healing?: boolean; isTurnActive?: boolean }) => (
+    <div className={`avatar-frame ${isPlayer ? 'player' : 'opponent'} ${takingDamage ? 'taking-damage' : ''} ${healing ? 'healing' : ''} ${isTurnActive ? 'turn-active' : ''}`}>
       <img src={getAvatarPath(suit)} alt={isPlayer ? 'Player avatar' : 'AI avatar'} />
     </div>
   )
 
-  // Support icon component (circular) - now clickable when ability is available
-  const SupportIcon = ({ 
-    suit, 
-    isPlayer, 
-    available, 
-    onClick 
-  }: { 
-    suit: StandardSuit | null; 
-    isPlayer: boolean;
-    available: boolean;
-    onClick?: () => void;
-  }) => (
-    <div 
-      className={`support-icon ${available ? 'support-available' : ''} ${isPlayer && available ? 'clickable' : ''}`}
-      onClick={isPlayer && available ? onClick : undefined}
-      title={available ? (isPlayer ? 'Click to use support ability!' : 'Support ability ready!') : undefined}
-    >
-      <img src={getSupportPath(suit)} alt="Support" />
-    </div>
-  )
+  const MinionIcon = ({
+    suit,
+    isActive = false,
+    canActivate = false,
+    onClick,
+  }: {
+    suit: StandardSuit | null
+    isActive?: boolean
+    canActivate?: boolean
+    onClick?: () => void
+  }) => {
+    const [showTooltip, setShowTooltip] = useState(false)
+    const [tooltipPinned, setTooltipPinned] = useState(false)
+    const [tooltipPortalRect, setTooltipPortalRect] = useState<{ top: number; left: number; position: 'above' | 'below' } | null>(null)
+    const minionRef = useRef<HTMLDivElement>(null)
+    const status = isActive ? 'Active' : 'Inactive'
+    const tooltipData = (() => {
+      if (suit === 'spades') {
+        return {
+          header: `Spades Minion (${status})`,
+          damage: '+3 Damage Buff',
+          description: 'Randomly empowers one card in your hand.',
+          effect: 'If that card is used in lane damage calculation, it adds +3 lane damage.',
+        }
+      }
+      if (suit === 'hearts') {
+        return {
+          header: `Hearts Minion (${status})`,
+          damage: '+3 Healing Buff',
+          description: 'Randomly empowers one card in your hand.',
+          effect: 'If that card is used in lane damage calculation, you heal 3 HP.',
+        }
+      }
+      if (suit === 'clubs') {
+        return {
+          header: `Clubs Minion (${status})`,
+          damage: 'Suit Change',
+          description: 'Choose a card in your hand.',
+          effect: 'Change that card to a suit of your choice.',
+        }
+      }
+      return {
+        header: `Diamonds Minion (${status})`,
+        damage: 'Rank Up',
+        description: 'Choose a non-Joker card in your hand.',
+        effect: 'Increase its rank by one. Ace becomes Joker.',
+      }
+    })()
+
+    const updateTooltipRect = useCallback(() => {
+      if (!showTooltip || !minionRef.current) {
+        setTooltipPortalRect(null)
+        return
+      }
+      const rect = minionRef.current.getBoundingClientRect()
+      const spaceAbove = rect.top
+      const spaceBelow = window.innerHeight - rect.bottom
+      const position: 'above' | 'below' = spaceAbove >= 130 || spaceAbove > spaceBelow ? 'above' : 'below'
+      setTooltipPortalRect({
+        top: position === 'above' ? rect.top - 8 : rect.bottom + 8,
+        left: rect.left + rect.width / 2,
+        position,
+      })
+    }, [showTooltip])
+
+    useLayoutEffect(() => {
+      if (!showTooltip) {
+        setTooltipPortalRect(null)
+        return
+      }
+      updateTooltipRect()
+      window.addEventListener('scroll', updateTooltipRect, true)
+      window.addEventListener('resize', updateTooltipRect)
+      return () => {
+        window.removeEventListener('scroll', updateTooltipRect, true)
+        window.removeEventListener('resize', updateTooltipRect)
+      }
+    }, [showTooltip, updateTooltipRect])
+
+    useEffect(() => {
+      if (!tooltipPinned) return
+      const handleClickOutside = (e: Event) => {
+        if (minionRef.current && !minionRef.current.contains(e.target as Node)) {
+          setShowTooltip(false)
+          setTooltipPinned(false)
+        }
+      }
+      document.addEventListener('mousedown', handleClickOutside)
+      document.addEventListener('touchstart', handleClickOutside)
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside)
+        document.removeEventListener('touchstart', handleClickOutside)
+      }
+    }, [tooltipPinned])
+
+    return (
+      <div
+        ref={minionRef}
+        className={`support-icon minion-icon ${isActive ? 'minion-active' : ''} ${canActivate ? 'clickable' : ''} ${showTooltip ? 'tooltip-visible' : ''}`}
+        aria-label={`Minion ability ${isActive ? 'active' : 'inactive'}`}
+        onMouseEnter={() => setShowTooltip(true)}
+        onMouseLeave={() => {
+          if (!tooltipPinned) setShowTooltip(false)
+        }}
+        onClick={() => {
+          setTooltipPinned(prev => !prev)
+          setShowTooltip(true)
+          if (canActivate) onClick?.()
+        }}
+      >
+        <img src={getMinionPath(suit, isActive)} alt="minion ability icon" />
+
+        {showTooltip && tooltipPortalRect && typeof document !== 'undefined' && document.body &&
+          createPortal(
+            <div
+              className="card-tooltip-portal"
+              style={{
+                position: 'fixed',
+                left: tooltipPortalRect.left,
+                top: tooltipPortalRect.top,
+                transform: tooltipPortalRect.position === 'above' ? 'translate(-50%, -100%)' : 'translateX(-50%)',
+                zIndex: 9999,
+              }}
+            >
+              <div className={`card-tooltip relic-tooltip ${isActive ? 'active' : 'inactive'} tooltip-${tooltipPortalRect.position}`}>
+                <div className="tooltip-header">{tooltipData.header}</div>
+                <div className="tooltip-damage">{tooltipData.damage}</div>
+                <div className="tooltip-description">{tooltipData.description}</div>
+                <div className="tooltip-effect">{tooltipData.effect}</div>
+              </div>
+            </div>,
+            document.body,
+          )}
+      </div>
+    )
+  }
+
+  const getRelicTooltip = (relic: RelicType, isActive: boolean): string => {
+    const status = isActive ? 'active' : 'inactive'
+    const refreshText = isActive ? '' : ' Refreshes at the next War Flip.'
+    if (relic === 'shield') {
+      return `Shield relic (${status}): Select a lane to shield for 50% damage reduction on that lane's next resolve.${refreshText}`
+    }
+    if (relic === 'skull') {
+      return `Skull relic (${status}): Move one of your played cards to another non-full lane.${refreshText}`
+    }
+    return `Sword relic (${status}): Select a lane to double your poker bonus on that lane's next resolve.${refreshText}`
+  }
 
   const RelicIcon = ({
     suit,
     relic,
+    isActive = false,
+    canActivate = false,
+    onClick,
   }: {
     suit: StandardSuit | null
-    relic: 'skull' | 'sword'
-  }) => (
-    <div className="support-icon relic-icon" title={`${relic} relic (inactive)`}>
-      <img src={getRelicPath(suit, relic, false)} alt={`${relic} relic`} />
-    </div>
-  )
+    relic: RelicType
+    isActive?: boolean
+    canActivate?: boolean
+    onClick?: () => void
+  }) => {
+    const [showTooltip, setShowTooltip] = useState(false)
+    const [tooltipPinned, setTooltipPinned] = useState(false)
+    const [tooltipPortalRect, setTooltipPortalRect] = useState<{ top: number; left: number; position: 'above' | 'below' } | null>(null)
+    const relicRef = useRef<HTMLDivElement>(null)
+    const tooltipText = getRelicTooltip(relic, isActive)
+
+    const updateTooltipRect = useCallback(() => {
+      if (!showTooltip || !relicRef.current) {
+        setTooltipPortalRect(null)
+        return
+      }
+
+      const rect = relicRef.current.getBoundingClientRect()
+      const spaceAbove = rect.top
+      const spaceBelow = window.innerHeight - rect.bottom
+      const position: 'above' | 'below' = spaceAbove >= 130 || spaceAbove > spaceBelow ? 'above' : 'below'
+      setTooltipPortalRect({
+        top: position === 'above' ? rect.top - 8 : rect.bottom + 8,
+        left: rect.left + rect.width / 2,
+        position,
+      })
+    }, [showTooltip])
+
+    useLayoutEffect(() => {
+      if (!showTooltip) {
+        setTooltipPortalRect(null)
+        return
+      }
+
+      updateTooltipRect()
+      window.addEventListener('scroll', updateTooltipRect, true)
+      window.addEventListener('resize', updateTooltipRect)
+      return () => {
+        window.removeEventListener('scroll', updateTooltipRect, true)
+        window.removeEventListener('resize', updateTooltipRect)
+      }
+    }, [showTooltip, updateTooltipRect])
+
+    useEffect(() => {
+      if (!tooltipPinned) return
+
+      const handleClickOutside = (e: Event) => {
+        if (relicRef.current && !relicRef.current.contains(e.target as Node)) {
+          setShowTooltip(false)
+          setTooltipPinned(false)
+        }
+      }
+
+      document.addEventListener('mousedown', handleClickOutside)
+      document.addEventListener('touchstart', handleClickOutside)
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside)
+        document.removeEventListener('touchstart', handleClickOutside)
+      }
+    }, [tooltipPinned])
+
+    const tooltipData = (() => {
+      const status = isActive ? 'Active' : 'Inactive'
+      if (relic === 'shield') {
+        return {
+          header: `Shield Relic (${status})`,
+          damage: 'Lane Defense',
+          description: 'Select any lane to shield your side.',
+          effect: 'The next damage you take from that lane is reduced by 50% (rounded up).',
+        }
+      }
+      if (relic === 'skull') {
+        return {
+          header: `Skull Relic (${status})`,
+          damage: 'Card Movement',
+          description: 'Select one of your played cards, then choose another lane.',
+          effect: 'Move that card to a non-full lane on your side.',
+        }
+      }
+      return {
+        header: `Sword Relic (${status})`,
+        damage: 'Poker Bonus',
+        description: 'Select any lane to empower your next resolve there.',
+        effect: 'Doubles only your poker bonus contribution on that lane.',
+      }
+    })()
+
+    return (
+      <div
+        ref={relicRef}
+        className={`support-icon relic-icon ${isActive ? 'relic-active' : ''} ${canActivate ? 'clickable' : ''} ${showTooltip ? 'tooltip-visible' : ''}`}
+        aria-label={tooltipText}
+        onMouseEnter={() => setShowTooltip(true)}
+        onMouseLeave={() => {
+          if (!tooltipPinned) setShowTooltip(false)
+        }}
+        onClick={() => {
+          setTooltipPinned(prev => !prev)
+          setShowTooltip(true)
+          if (canActivate) onClick?.()
+        }}
+      >
+        <img src={getRelicPath(suit, relic, isActive)} alt={`${relic} icon`} />
+
+        {showTooltip && tooltipPortalRect && typeof document !== 'undefined' && document.body &&
+          createPortal(
+            <div
+              className="card-tooltip-portal"
+              style={{
+                position: 'fixed',
+                left: tooltipPortalRect.left,
+                top: tooltipPortalRect.top,
+                transform: tooltipPortalRect.position === 'above' ? 'translate(-50%, -100%)' : 'translateX(-50%)',
+                zIndex: 9999,
+              }}
+            >
+              <div className={`card-tooltip relic-tooltip ${isActive ? 'active' : 'inactive'} tooltip-${tooltipPortalRect.position}`}>
+                <div className="tooltip-header">{tooltipData.header}</div>
+                <div className="tooltip-damage">{tooltipData.damage}</div>
+                <div className="tooltip-description">{tooltipData.description}</div>
+                <div className="tooltip-effect">{tooltipData.effect}</div>
+              </div>
+            </div>,
+            document.body,
+          )}
+      </div>
+    )
+  }
 
   // HP Display component
   const HPDisplay = ({ hp, isPlayer }: { hp: number; isPlayer: boolean }) => (
@@ -1194,10 +1871,10 @@ export function GameBoard() {
     </div>
   )
 
-  // Calculate hands remaining (minimum of both players' decks / 3)
-  const handsRemaining = Math.floor(Math.min(state.player1.deck.length, state.player2.deck.length) / 3)
+  // v4 Shared Deck: hands remaining = shared deck size / 6 (3 cards per player per round)
+  const handsRemaining = Math.floor(state.sharedDeck.length / 6)
   const deckGlowClass = handsRemaining === 2 ? 'deck-glow-warning' : handsRemaining <= 1 ? 'deck-glow-danger' : ''
-  const bothDecksEmpty = state.player1.deck.length === 0 && state.player2.deck.length === 0
+  const sharedDeckEmpty = state.sharedDeck.length === 0
 
   // Draw pile component - now uses field control suit for card back
   const DrawPile = ({ count, glowClass = '', showEmptyOutline = false }: { count: number; glowClass?: string; showEmptyOutline?: boolean }) => (
@@ -1216,6 +1893,70 @@ export function GameBoard() {
       <span className="draw-pile-count">{count}</span>
     </div>
   )
+
+  const renderMinionMenu = () => {
+    if (!minionMenuMode) return null
+    const player = getActingPlayer()
+    const playerState = player === 1 ? state.player1 : state.player2
+    const playerSuit = player === 1 ? state.player1Suit : state.player2Suit
+    const cards = minionMenuMode === 'diamonds-card'
+      ? playerState.hand.filter(card => card.rank !== 'JOKER')
+      : playerState.hand
+    const selectedCard = playerState.hand.find(card => card.id === selectedMinionCardId)
+    const title = minionMenuMode === 'clubs-suit'
+      ? 'Choose New Suit'
+      : minionMenuMode === 'diamonds-card'
+        ? 'Choose a Card to Rank Up'
+        : 'Choose a Card to Change Suit'
+
+    return (
+      <div className="minion-menu-overlay">
+        <div className="minion-menu">
+          <div className="minion-menu-title">{title}</div>
+          {minionMenuMode === 'clubs-suit' && selectedCard ? (
+            <>
+              <div className="minion-selected-card">
+                <CardView card={selectedCard} small ownerSuit={playerSuit} />
+              </div>
+              <div className="minion-suit-options">
+                {SUIT_OPTIONS.map(option => (
+                  <button
+                    key={option.suit}
+                    className="minion-suit-option"
+                    onClick={() => handleMinionSuitSelect(option.suit)}
+                  >
+                    <span className="minion-suit-emoji">{option.emoji}</span>
+                    <span className="minion-suit-label">{option.label}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : cards.length > 0 ? (
+            <div className="minion-card-options">
+              {cards.map(card => (
+                <button
+                  key={card.id}
+                  className="minion-card-option"
+                  onClick={() => {
+                    if (minionMenuMode === 'diamonds-card') {
+                      handleMinionDiamondsCardSelect(card.id)
+                    } else {
+                      handleMinionClubsCardSelect(card.id)
+                    }
+                  }}
+                >
+                  <CardView card={card} small ownerSuit={playerSuit} />
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="minion-menu-empty">No valid cards</div>
+          )}
+          <button className="minion-menu-cancel" onClick={closeMinionMenu}>Cancel</button>
+        </div>
+      </div>
+    )
+  }
 
   // Get dynamic background style
   const backgroundStyle = {
@@ -1303,6 +2044,7 @@ export function GameBoard() {
   if (state.phase === 'WaitingForPlayer') {
     const handleCancelHost = () => {
       if (state.roomCode) {
+        Matches.closeLobby(state.roomCode, state.onlineSessionToken)
         Lobbies.removeLobby(state.roomCode)
       }
       Network.disconnect()
@@ -1597,7 +2339,7 @@ export function GameBoard() {
 
   return (
     <div 
-      className="game-container" 
+      className={`game-container ${boardSelectionMode?.startsWith('relic-') ? 'relic-targeting-active' : ''}`}
       style={backgroundStyle}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -1608,6 +2350,12 @@ export function GameBoard() {
       {showYourTurn && (
         <div className="your-turn-popup">
           <div className="your-turn-text">YOUR TURN!</div>
+        </div>
+      )}
+
+      {opponentDisconnected && (
+        <div className="connection-status-banner">
+          Opponent disconnected. Waiting for reconnect...
         </div>
       )}
       
@@ -1660,23 +2408,29 @@ export function GameBoard() {
       {/* v2 Effect Choice Modal */}
       {/* Board Selection Mode Instructions */}
       {boardSelectionMode && (
-        <div className="board-selection-instructions">
-          <div className="board-selection-text">
-            {boardSelectionMode === 'neutralize' && 'Click a lane to neutralize it'}
-            {boardSelectionMode === 'move-source' && 'Click a lane to pick the top opponent card'}
-            {boardSelectionMode === 'move-target' && 'Click a lane to move the card there'}
+        <>
+          {boardSelectionMode.startsWith('relic-') && <div className="relic-targeting-dim" aria-hidden="true" />}
+          <div className="board-selection-instructions">
+            <div className="board-selection-text">
+              {boardSelectionMode === 'neutralize' && 'Click a lane to neutralize it'}
+              {boardSelectionMode === 'move-source' && 'Click a lane to pick the top opponent card'}
+              {boardSelectionMode === 'move-target' && 'Click a lane to move the card there'}
+              {boardSelectionMode === 'relic-shield-lane' && 'Select a lane to shield (50% damage reduction)'}
+              {boardSelectionMode === 'relic-sword-lane' && 'Choose a lane to double the poker bonus of'}
+              {boardSelectionMode === 'relic-skull-card' && 'Select one of your played cards to move'}
+              {boardSelectionMode === 'relic-skull-target' && 'Select a lane to move the selected card to'}
+            </div>
+            <button
+              className="board-selection-cancel"
+              onClick={cancelBoardSelection}
+            >
+              Cancel
+            </button>
           </div>
-          <button 
-            className="board-selection-cancel"
-            onClick={() => {
-              setBoardSelectionMode(null)
-              setMoveSourceLane(null)
-            }}
-          >
-            Cancel
-          </button>
-        </div>
+        </>
       )}
+
+      {renderMinionMenu()}
       
       {state.pendingEffectChoices.length > 0 && !boardSelectionMode && (() => {
         const choice = state.pendingEffectChoices[0]
@@ -1707,7 +2461,6 @@ export function GameBoard() {
             onClubsQueenDelay={handleClubsQueenDelay}
             onDiamondsAce={handleDiamondsAce}
             onDiamondsQueen={handleDiamondsQueen}
-            onHeartsAce={handleHeartsAce}
             onSpadesAce={handleSpadesAce}
             onDismiss={handleDismissEffectChoice}
           />
@@ -1726,7 +2479,8 @@ export function GameBoard() {
           // Opponent is shown at top
           const opponentData = shouldFlipPerspective ? state.player1 : state.player2
           const opponentSuit = shouldFlipPerspective ? state.player1Suit : state.player2Suit
-          const opponentSupportAvailable = shouldFlipPerspective ? state.player1SupportAvailable : state.player2SupportAvailable
+          const opponentPlayerNumber = shouldFlipPerspective ? 1 : 2
+          const opponentIsHumanControlled = state.gameMode !== 'vs-ai'
           const opponentDisplayHP = shouldFlipPerspective ? player1DisplayHP : player2DisplayHP
           const opponentTakingDamage = shouldFlipPerspective ? player1TakingDamage : player2TakingDamage
           const opponentHealing = shouldFlipPerspective ? player1Healing : player2Healing
@@ -1750,20 +2504,17 @@ export function GameBoard() {
               {/* Opponent avatar row: keep avatar perfectly centered */}
               <div className="hero-float opponent">
                 <div className="hero-slot-left">
+                  <MinionIcon suit={opponentSuit} isActive={opponentIsHumanControlled && opponentData.minionAvailable} />
                   <HPDisplay hp={opponentDisplayHP} isPlayer={false} />
                 </div>
                 <div className="hero-slot-center">
-                  <Avatar suit={opponentSuit} isPlayer={false} takingDamage={opponentTakingDamage} healing={opponentHealing} />
+                  <Avatar suit={opponentSuit} isPlayer={false} takingDamage={opponentTakingDamage} healing={opponentHealing} isTurnActive={state.currentPlayer === opponentPlayerNumber} />
                 </div>
                 <div className="hero-slot-right">
                   <div className="support-relic-row">
-                    <SupportIcon 
-                      suit={opponentSuit} 
-                      isPlayer={false} 
-                      available={opponentSupportAvailable || aiSupportGlowing}
-                    />
-                    <RelicIcon suit={opponentSuit} relic="skull" />
-                    <RelicIcon suit={opponentSuit} relic="sword" />
+                    <RelicIcon suit={opponentSuit} relic="shield" isActive={opponentIsHumanControlled && opponentData.relicsAvailable.shield} />
+                    <RelicIcon suit={opponentSuit} relic="skull" isActive={opponentIsHumanControlled && opponentData.relicsAvailable.skull} />
+                    <RelicIcon suit={opponentSuit} relic="sword" isActive={opponentIsHumanControlled && opponentData.relicsAvailable.sword} />
                   </div>
                 </div>
               </div>
@@ -1796,46 +2547,30 @@ export function GameBoard() {
           </button>
         )}
 
-        {/* Board Row: Draw Piles | Lanes | Discard + End Turn */}
+        {/* Board Row: Lanes (left/center) | All-lane community + Shared Deck + End Turn (right)
+            v6: all-lane community card is now on the right side with the draw pile and end turn button. */}
         {state.phase === 'Main' && (
           <div className="board-area">
           <div className="board-row">
-              {/* Draw Piles - LEFT (with perspective flip for online AND hotseat) */}
-              <div className="draw-piles-column">
-                {(() => {
-                  const isOnlineGuest = state.gameMode === 'online' && state.localPlayer === 2
-                  const isHotseatP2Turn = state.gameMode === 'vs-player' && state.currentPlayer === 2
-                  const shouldFlipPerspective = isOnlineGuest || isHotseatP2Turn
-                  
-                  const topDeckCount = shouldFlipPerspective ? state.player1.deck.length : state.player2.deck.length
-                  const bottomDeckCount = shouldFlipPerspective ? state.player2.deck.length : state.player1.deck.length
-                  return (
-                    <>
-                      <DrawPile count={topDeckCount} glowClass={deckGlowClass} showEmptyOutline={bothDecksEmpty} />
-                      <DrawPile count={bottomDeckCount} glowClass={deckGlowClass} showEmptyOutline={bothDecksEmpty} />
-                    </>
-                  )
-                })()}
-            </div>
-
-            {/* The 3 Lanes - CENTER */}
+            {/* The 3 Lanes - LEFT/CENTER */}
             <div className="lanes-container">
               {state.lanes.map(lane => (
                 <LaneView key={lane.id} lane={lane} />
               ))}
             </div>
 
-              {/* Discard + End Turn - RIGHT */}
+              {/* Right column: all-lane community card, shared deck, end turn, cards played. */}
               <div className="side-action-right">
-                <div 
-                  className={`discard-pile ${selectedCardId && canAct ? 'discard-pile-targetable' : ''} ${draggingCardId && canAct ? 'discard-drop-target' : ''}`}
-                  onClick={handleDiscard}
-                  onDragOver={handleDragOverDiscard}
-                  onDrop={handleDropOnDiscard}
+                <div
+                  className="community-poker-slot all-lane-community-slot"
+                  data-slot-id="all_lane_community_poker_card"
+                  aria-label="all_lane_community_poker_card"
                 >
-                  <img src={DISCARD_BACK} alt="Discard pile" className="discard-image" />
-                  <span className="discard-count">{state.discardPile.length}</span>
+                  {state.allLaneCommunityCard && (
+                    <CardView card={state.allLaneCommunityCard} small />
+                  )}
                 </div>
+                <DrawPile count={state.sharedDeck.length} glowClass={deckGlowClass} showEmptyOutline={sharedDeckEmpty} />
               <button 
                 className="end-turn-btn"
                 onClick={handleEndTurn}
@@ -1897,7 +2632,7 @@ export function GameBoard() {
           // Local player (current player in hotseat) is shown at bottom
           const localData = shouldFlipPerspective ? state.player2 : state.player1
           const localSuit = shouldFlipPerspective ? state.player2Suit : state.player1Suit
-          const localSupportAvailable = shouldFlipPerspective ? state.player2SupportAvailable : state.player1SupportAvailable
+          const localPlayerNumber = shouldFlipPerspective ? 2 : 1
           const localDisplayHP = shouldFlipPerspective ? player2DisplayHP : player1DisplayHP
           const localTakingDamage = shouldFlipPerspective ? player2TakingDamage : player1TakingDamage
           const localHealing = shouldFlipPerspective ? player2Healing : player1Healing
@@ -1906,21 +2641,40 @@ export function GameBoard() {
             <>
               <div className="hero-float player">
                 <div className="hero-slot-left">
+                  <MinionIcon
+                    suit={localSuit}
+                    isActive={localData.minionAvailable}
+                    canActivate={canUseMinion()}
+                    onClick={handleMinionClick}
+                  />
                   <HPDisplay hp={localDisplayHP} isPlayer={true} />
                 </div>
                 <div className="hero-slot-center">
-                  <Avatar suit={localSuit} isPlayer={true} takingDamage={localTakingDamage} healing={localHealing} />
+                  <Avatar suit={localSuit} isPlayer={true} takingDamage={localTakingDamage} healing={localHealing} isTurnActive={state.currentPlayer === localPlayerNumber} />
                 </div>
                 <div className="hero-slot-right">
                   <div className="support-relic-row">
-                    <SupportIcon 
-                      suit={localSuit} 
-                      isPlayer={true} 
-                      available={localSupportAvailable}
-                      onClick={handlePlayerUseSupport}
+                    <RelicIcon
+                      suit={localSuit}
+                      relic="shield"
+                      isActive={localData.relicsAvailable.shield}
+                      canActivate={canUseRelic('shield')}
+                      onClick={() => handleRelicClick('shield')}
                     />
-                    <RelicIcon suit={localSuit} relic="skull" />
-                    <RelicIcon suit={localSuit} relic="sword" />
+                    <RelicIcon
+                      suit={localSuit}
+                      relic="skull"
+                      isActive={localData.relicsAvailable.skull}
+                      canActivate={canUseRelic('skull')}
+                      onClick={() => handleRelicClick('skull')}
+                    />
+                    <RelicIcon
+                      suit={localSuit}
+                      relic="sword"
+                      isActive={localData.relicsAvailable.sword}
+                      canActivate={canUseRelic('sword')}
+                      onClick={() => handleRelicClick('sword')}
+                    />
                   </div>
                 </div>
               </div>

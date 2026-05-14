@@ -19,6 +19,23 @@ import { getRankTier } from './types'
 import { cardValue } from './deck'
 
 // ============================================================================
+// GLOBAL FEATURE FLAG
+// ============================================================================
+
+/**
+ * Master switch for all suit-based card effects.
+ *
+ * When `false`, every suit ability (damage/heal bonuses, Hearts regen, Spades
+ * bleed/Blood Debt, Diamonds charges, Clubs replacement/neutralize/move,
+ * on-play triggers, damage-to-regen conversion, etc.) is disabled at the
+ * source. Tooltips also omit effect descriptions so the UI cannot advertise
+ * effects that will not fire.
+ *
+ * Flip this to `true` (or gate with a future rework) to re-enable effects.
+ */
+export const SUIT_EFFECTS_ENABLED = false
+
+// ============================================================================
 // TRIGGER POLICIES
 // ============================================================================
 
@@ -150,22 +167,18 @@ registerEffect({
 registerEffect({
   suit: 'hearts',
   rankTier: 'low', // 2-6
-  triggerPolicy: { type: 'loss-oriented', fullOn: 'loss', halfOn: 'win' },
-  effectId: 'hearts-endurance',
-  description: 'Mitigation/Regen',
-  fullValue: 50, // 50% mitigation on loss
-  halfValue: 1,  // +1 regen on win
+  triggerPolicy: { type: 'on-play' },
+  effectId: 'hearts-temp-regen',
+  description: 'v3: +3 temp regen/turn for 3 turns',
   requiresChoice: false
 })
 
 registerEffect({
   suit: 'hearts',
   rankTier: 'mid', // 7-10
-  triggerPolicy: { type: 'win-oriented', fullOn: 'win', halfOn: 'loss' },
-  effectId: 'hearts-renewal',
-  description: 'Regen/Mitigation',
-  fullValue: 2,  // +2 regen on win
-  halfValue: 25, // 25% mitigation on loss
+  triggerPolicy: { type: 'on-play' },
+  effectId: 'hearts-renewal-burst',
+  description: 'v3: Instant heal for current Regen x4',
   requiresChoice: false
 })
 
@@ -174,7 +187,7 @@ registerEffect({
   rankTier: 'high', // J/Q/K
   triggerPolicy: { type: 'on-play' },
   effectId: 'hearts-vitality',
-  description: 'v2.2: J=+2 effect, Q=+2 stacks, K=+1/+1',
+  description: 'v3: J=heal Regen x8, Q=+4 perm Regen, K=+2 perm Regen + heal Regen x5',
   requiresChoice: false
 })
 
@@ -182,9 +195,9 @@ registerEffect({
   suit: 'hearts',
   rankTier: 'ace',
   triggerPolicy: { type: 'on-play' },
-  effectId: 'hearts-ace-second-wind',
-  description: 'v2.2: +1 regen, +1 effect, then choose bonus',
-  requiresChoice: true  // v2.2: Choice for additional bonus
+  effectId: 'hearts-ace-damage-conversion',
+  description: 'v3: Next lane won converts damage dealt into temp regen (3 turns)',
+  requiresChoice: false
 })
 
 // ============================================================================
@@ -241,6 +254,8 @@ registerEffect({
  * IMPORTANT: Jokers are NEVER active for suit effects in v2
  */
 export function isCardActiveForEffects(card: Card, ownerSuit: StandardSuit | null): boolean {
+  // Master feature flag: all suit effects disabled.
+  if (!SUIT_EFFECTS_ENABLED) return false
   if (!ownerSuit) return false
   // Jokers do NOT trigger suit effects (even though they now have suits)
   if (card.rank === 'JOKER') return false
@@ -266,9 +281,11 @@ export function shouldEffectTrigger(
   isWinner: boolean,
   isTie: boolean
 ): boolean {
+  // Master feature flag: all suit effects disabled.
+  if (!SUIT_EFFECTS_ENABLED) return false
   // Ties never trigger effects
   if (isTie) return false
-  
+
   switch (def.triggerPolicy.type) {
     case 'loss-only':
       return !isWinner
@@ -388,22 +405,28 @@ export function getCardTooltipData(
   if (card.rank === 'JOKER') {
     return getJokerInHandTooltip()
   }
-  
+
   const rankName = getRankDisplayName(card.rank)
   const suitName = getSuitDisplayName(card.suit)
   const value = cardValue(card)
-  
+
   const header = `${rankName} of ${suitName}`
   const baseDamage = `Deals ${value} damage`
-  
+
+  // Master feature flag: suit abilities disabled -> omit the effect line so
+  // the tooltip cannot advertise an effect that will not fire.
+  if (!SUIT_EFFECTS_ENABLED) {
+    return { header, baseDamage, effect: null }
+  }
+
   const def = getEffectDefinition(card, ownerSuit)
   if (!def) {
     return { header, baseDamage, effect: null }
   }
-  
+
   // Build effect description based on suit and tier
   const effect = getEffectDescriptionForTooltip(card, def, ownerSuit!)
-  
+
   return { header, baseDamage, effect }
 }
 
@@ -472,19 +495,19 @@ function getSpadesTooltip(rank: Rank, tier: RankTier, def: EffectDefinition): st
 
 function getHeartsTooltip(rank: Rank, tier: RankTier, _def: EffectDefinition): string {
   if (tier === 'ace') {
-    return 'ON PLAY: +1 Regen/turn, +1 Effect, then choose +1 regen OR +1 effect'
+    return 'ON PLAY: Next lane you win converts damage dealt into temp Regen (3 turns)'
   }
   if (tier === 'low') {
-    return 'LOSS: 50% lane damage mitigation | WIN: +1 Regen/turn'
+    return 'ON PLAY: +3 temp Regen/turn for 3 turns'
   }
   if (tier === 'mid') {
-    return 'WIN: +2 Regen/turn | LOSS: 25% lane damage mitigation'
+    return 'ON PLAY: Heal for current Regen x4'
   }
-  // v2.2 High tier - trigger on play
+  // v3 High tier - trigger on play
   switch (rank) {
-    case 'J': return 'ON PLAY: Regen Effect +2 (5 turns)'
-    case 'Q': return 'ON PLAY: +2 Regen/turn (5 turns)'
-    case 'K': return 'ON PLAY: +1 Regen Effect, +1 Regen/turn'
+    case 'J': return 'ON PLAY: Heal for current Regen x8'
+    case 'Q': return 'ON PLAY: +4 permanent Regen'
+    case 'K': return 'ON PLAY: +2 permanent Regen, then heal for current Regen x5'
     default: return 'No effect'
   }
 }
@@ -578,6 +601,8 @@ export function getCardEffectTooltip(
   card: Card,
   ownerSuit: StandardSuit | null
 ): string {
+  // Master feature flag: never surface an effect string when disabled.
+  if (!SUIT_EFFECTS_ENABLED) return ''
   const data = getCardTooltipData(card, ownerSuit)
   return data.effect || 'No effect'
 }

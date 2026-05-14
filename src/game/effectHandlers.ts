@@ -11,8 +11,7 @@ import type {
   GameState,
   LaneId,
   EffectChoice,
-  BleedStack,
-  PendingLaneResolution
+  BleedStack
 } from './types'
 import { getRankTier } from './types'
 import { 
@@ -129,11 +128,11 @@ export function applyClubsAceReplacement(
   const newHand = [...playerState.hand]
   newHand[handCardIndex] = replacementCard
   
-  // Add replaced card to discard
-  const newDiscard = [...state.discardPile, replacedCard]
-  
+  // v4 Shared Deck: replaced card goes to the hidden out-of-play pile
+  const newOutOfPlay = [...state.outOfPlayPile, replacedCard]
+
   console.log(`[Clubs] Player ${player} replaced hand card with Clubs Ace`)
-  
+
   if (player === 1) {
     return {
       ...state,
@@ -141,7 +140,7 @@ export function applyClubsAceReplacement(
         ...state.player1,
         hand: newHand
       },
-      discardPile: newDiscard
+      outOfPlayPile: newOutOfPlay
     }
   } else {
     return {
@@ -150,7 +149,7 @@ export function applyClubsAceReplacement(
         ...state.player2,
         hand: newHand
       },
-      discardPile: newDiscard
+      outOfPlayPile: newOutOfPlay
     }
   }
 }
@@ -188,46 +187,19 @@ export function handleClubsQueen(ctx: EffectContext, _laneCards: Card[]): GameSt
 
 /**
  * Apply Clubs Queen lane delay effect
- * - If target lane is pending: increment turnsUntilResolution by 1
- * - If target lane not pending: set laneDelayedUntilTurn flag
+ *
+ * v5 Round Flow: the pending-resolution / 2-turn-countdown system has been
+ * removed - lanes now resolve and lock the moment both players fill them.
+ * Clubs Queen's delay effect therefore has no state to manipulate. This
+ * function is kept as a no-op so the (currently disabled) Clubs effect
+ * handler can still reference it without compile errors; it will be
+ * redesigned alongside the future suit rework.
  */
 export function applyClubsQueenDelay(
   state: GameState, 
-  targetLaneId: LaneId, 
-  sourceLaneId: LaneId
+  _targetLaneId: LaneId, 
+  _sourceLaneId: LaneId
 ): GameState {
-  // Cannot target the same lane
-  if (targetLaneId === sourceLaneId) return state
-  
-  // Check if target lane is in pendingResolutionLanes
-  const pendingIndex = state.pendingResolutionLanes.findIndex(p => p.laneId === targetLaneId)
-  
-  if (pendingIndex >= 0) {
-    // Lane is pending - increment turnsUntilResolution (max +1 delay)
-    const pending = state.pendingResolutionLanes[pendingIndex]
-    if (pending.turnsUntilResolution < 2) {
-      // Only allow +1 delay (from 1 to 2)
-      const updatedPending = [...state.pendingResolutionLanes]
-      updatedPending[pendingIndex] = {
-        ...pending,
-        turnsUntilResolution: pending.turnsUntilResolution + 1
-      }
-      return {
-        ...state,
-        pendingResolutionLanes: updatedPending
-      }
-    }
-  } else {
-    // Lane not pending - set delay flag
-    return {
-      ...state,
-      laneDelayedUntilTurn: {
-        ...state.laneDelayedUntilTurn,
-        [targetLaneId]: true
-      }
-    }
-  }
-  
   return state
 }
 
@@ -468,170 +440,154 @@ function addBloodDebt(state: GameState, player: CurrentPlayer, amount: number): 
 // HEARTS EFFECT HANDLERS
 // ============================================================================
 
-// v2.2 Hearts Regen Constants
-const REGEN_DURATION_TURNS = 5  // Duration in Hearts player turns
+// v3 Hearts Regen Constants
+const TEMP_REGEN_DURATION_TURNS = 3  // Temp regen instance duration (Hearts player turns)
 
 /**
- * Apply regen to a player as a new instance (does NOT refresh existing instances)
- * v2.2: Regen now works like bleed - separate instances with independent durations
+ * v3 Hearts: compute current total regen per-tick value for a player.
+ * permanent + sum of all temp instance healingPerTurn (no multiplier)
  */
-export function applyRegenGain(state: GameState, player: CurrentPlayer, healingPerTurn: number): GameState {
-  const playerState = player === 1 ? state.player1 : state.player2
-  
-  // Create a new regen instance
-  const newRegenInstance = {
-    healingPerTurn: healingPerTurn,
-    turnsRemaining: REGEN_DURATION_TURNS
-  }
-  
-  // Add to existing regen stacks (does NOT refresh old instances)
-  const newRegenStacks = [...playerState.regenStacks, newRegenInstance]
-  
-  // Calculate total healing per turn for logging
-  const totalHealingPerTurn = newRegenStacks.reduce((sum, stack) => sum + stack.healingPerTurn, 0)
-  
-  console.log(`[Hearts Regen] Player ${player} gains new regen instance: +${healingPerTurn}/turn for ${REGEN_DURATION_TURNS} turns. Total: ${totalHealingPerTurn}/turn (${newRegenStacks.length} instances)`)
-  
-  if (player === 1) {
-    return {
-      ...state,
-      player1: {
-        ...state.player1,
-        regenStacks: newRegenStacks
-      }
-    }
-  } else {
-    return {
-      ...state,
-      player2: {
-        ...state.player2,
-        regenStacks: newRegenStacks
-      }
-    }
-  }
+export function getCurrentTotalRegen(playerState: { regenPermanent: number; regenStacks: { healingPerTurn: number }[] }): number {
+  const tempSum = playerState.regenStacks.reduce((sum, s) => sum + s.healingPerTurn, 0)
+  return playerState.regenPermanent + tempSum
 }
 
 /**
- * Apply regen effect bonus to a player
- * Always refreshes bonus duration to full (5 Hearts player turns)
+ * v3 Hearts: add to permanent regen baseline.
  */
-export function applyRegenEffectBonusGain(state: GameState, player: CurrentPlayer, bonusToAdd: number): GameState {
+export function addPermanentRegen(state: GameState, player: CurrentPlayer, amount: number): GameState {
+  if (amount <= 0) return state
   const playerState = player === 1 ? state.player1 : state.player2
-  
-  const newRegenEffectBonus = playerState.regenEffectBonus + bonusToAdd
-  const newBonusTurnsRemaining = REGEN_DURATION_TURNS // Always refresh to full duration
-  
-  console.log(`[Hearts Regen] Player ${player} gains +${bonusToAdd} regen effect bonus. Total bonus: ${newRegenEffectBonus}, Duration refreshed to ${newBonusTurnsRemaining} turns`)
-  
+  const newPermanent = playerState.regenPermanent + amount
+  console.log(`[Hearts Regen v3] Player ${player} permanent regen +${amount} -> ${newPermanent}`)
   if (player === 1) {
-    return {
-      ...state,
-      player1: {
-        ...state.player1,
-        regenEffectBonus: newRegenEffectBonus,
-        regenEffectBonusTurnsRemaining: newBonusTurnsRemaining
-      }
-    }
-  } else {
-    return {
-      ...state,
-      player2: {
-        ...state.player2,
-        regenEffectBonus: newRegenEffectBonus,
-        regenEffectBonusTurnsRemaining: newBonusTurnsRemaining
-      }
-    }
+    return { ...state, player1: { ...state.player1, regenPermanent: newPermanent } }
   }
+  return { ...state, player2: { ...state.player2, regenPermanent: newPermanent } }
 }
 
 /**
- * Hearts 2-6: Endurance
- * v2: ON LOSS: 50% mitigation (handled in resolveLane)
- *     ON WIN: +1 regen stacks (refresh duration)
+ * v3 Hearts: add a new TEMP regen instance (does NOT refresh existing temps).
+ */
+export function addTempRegen(
+  state: GameState,
+  player: CurrentPlayer,
+  healingPerTurn: number,
+  turnsRemaining: number = TEMP_REGEN_DURATION_TURNS
+): GameState {
+  if (healingPerTurn <= 0 || turnsRemaining <= 0) return state
+  const playerState = player === 1 ? state.player1 : state.player2
+  const newStacks = [...playerState.regenStacks, { healingPerTurn, turnsRemaining }]
+  console.log(`[Hearts Regen v3] Player ${player} gains temp regen +${healingPerTurn}/turn for ${turnsRemaining} turns. Instances: ${newStacks.length}`)
+  if (player === 1) {
+    return { ...state, player1: { ...state.player1, regenStacks: newStacks } }
+  }
+  return { ...state, player2: { ...state.player2, regenStacks: newStacks } }
+}
+
+/**
+ * v3 Hearts: perform `times` instant regen procs. Each proc heals for current total regen.
+ */
+export function applyInstantRegenProcs(state: GameState, player: CurrentPlayer, times: number): GameState {
+  if (times <= 0) return state
+  const playerState = player === 1 ? state.player1 : state.player2
+  const perProc = getCurrentTotalRegen(playerState)
+  if (perProc <= 0) return state
+  const totalHeal = perProc * times
+  console.log(`[Hearts Regen v3] Player ${player} procs regen ${times}x at ${perProc} = ${totalHeal} HP`)
+  if (player === 1) {
+    return { ...state, player1: { ...state.player1, hp: state.player1.hp + totalHeal } }
+  }
+  return { ...state, player2: { ...state.player2, hp: state.player2.hp + totalHeal } }
+}
+
+/**
+ * v3 Hearts Ace: arm one-shot flag for next won lane to convert damage to temp regen.
+ */
+export function armHeartsAceDamageConversion(state: GameState, player: CurrentPlayer): GameState {
+  console.log(`[Hearts Regen v3] Player ${player} armed Ace damage-to-regen conversion`)
+  if (player === 1) {
+    return { ...state, player1: { ...state.player1, pendingAceDamageToRegen: true } }
+  }
+  return { ...state, player2: { ...state.player2, pendingAceDamageToRegen: true } }
+}
+
+/**
+ * @deprecated v3: legacy helper kept to avoid breaking non-Hearts imports. No-op.
+ */
+export function applyRegenGain(state: GameState, _player: CurrentPlayer, _healingPerTurn: number): GameState {
+  console.warn('[Hearts v3] applyRegenGain is deprecated; use addPermanentRegen / addTempRegen instead')
+  return state
+}
+
+/**
+ * @deprecated v3: Hearts no longer uses the effect-bonus multiplier. No-op kept for legacy callers.
+ */
+export function applyRegenEffectBonusGain(state: GameState, _player: CurrentPlayer, _bonusToAdd: number): GameState {
+  console.warn('[Hearts v3] applyRegenEffectBonusGain is deprecated and has no effect')
+  return state
+}
+
+/**
+ * v3 Hearts 2-6/7-10 at lane resolution: no-op (effects trigger on play).
  */
 export function handleHeartsLowEffect(ctx: EffectContext): GameState {
-  if (ctx.strength === 'none') return ctx.state
-  
-  // ON WIN (half strength in loss-oriented): +1 regen
-  if (ctx.isWinner) {
-    return applyRegenGain(ctx.state, ctx.player, 1)
-  }
-  
-  // ON LOSS: Mitigation is handled in resolveLane, no additional effect here
   return ctx.state
 }
 
-/**
- * Hearts 7-10: Renewal
- * v2: ON WIN: +2 regen stacks (refresh duration)
- *     ON LOSS: 25% mitigation (handled in resolveLane)
- */
 export function handleHeartsMidEffect(ctx: EffectContext): GameState {
-  if (ctx.strength === 'none') return ctx.state
-  
-  // ON WIN (full strength in win-oriented): +2 regen
-  if (ctx.isWinner) {
-    return applyRegenGain(ctx.state, ctx.player, 2)
-  }
-  
-  // ON LOSS: Mitigation is handled in resolveLane, no additional effect here
   return ctx.state
 }
 
 /**
- * @deprecated v2: Hearts J/Q/K now trigger on play via handleHeartsFaceCardOnPlay
- * This function is kept for backward compatibility but should not be called
+ * @deprecated Hearts face cards trigger on play via handleHeartsFaceCardOnPlay.
  */
 export function handleHeartsJQEffect(ctx: EffectContext): GameState {
-  // v2: This should not be called - Hearts face cards are on-play only
-  console.warn('[Hearts] handleHeartsJQEffect called but should not be - J/Q are on-play effects')
   return ctx.state
 }
 
 /**
- * @deprecated v2: Hearts King now triggers on play via handleHeartsFaceCardOnPlay
- * This function is kept for backward compatibility but should not be called
+ * @deprecated Hearts King triggers on play.
  */
 export function handleHeartsKingEffect(ctx: EffectContext): GameState {
-  // v2: This should not be called - Hearts King is an on-play effect
-  console.warn('[Hearts] handleHeartsKingEffect called but should not be - K is on-play effect')
   return ctx.state
 }
 
 /**
- * v2.2 Hearts Ace: On-play - +1 regen, +1 regen effect, then menu choice for +1 more of either
+ * v3 Hearts Ace: ON PLAY - arm damage-to-regen flag (no choice menu).
  */
-export function handleHeartsAceOnPlay(state: GameState, player: CurrentPlayer, card: Card): GameState {
-  // Base effect: +1 regen stacks, +1 regen effect bonus
-  let newState = applyRegenGain(state, player, 1)
-  newState = applyRegenEffectBonusGain(newState, player, 1)
-  
-  // Queue choice for additional bonus: +1 more regen OR +1 more regen effect
-  const choice: EffectChoice = {
-    type: 'hearts-ace-regen-choice',
-    player: player,
-    sourceCardId: card.id
-  }
-  
-  return {
-    ...newState,
-    pendingEffectChoices: [...newState.pendingEffectChoices, choice]
-  }
+export function handleHeartsAceOnPlay(state: GameState, player: CurrentPlayer, _card: Card): GameState {
+  return armHeartsAceDamageConversion(state, player)
 }
 
 /**
- * Apply Hearts Ace choice: +1 regen or +1 regen effect
+ * @deprecated v3: Hearts Ace no longer offers a choice. No-op kept for legacy callers.
  */
 export function applyHeartsAceChoice(
   state: GameState,
-  player: CurrentPlayer,
-  choice: 'regen' | 'regenEffect'
+  _player: CurrentPlayer,
+  _choice: 'regen' | 'regenEffect'
 ): GameState {
-  if (choice === 'regen') {
-    return applyRegenGain(state, player, 1)
-  } else {
-    return applyRegenEffectBonusGain(state, player, 1)
+  return state
+}
+
+/**
+ * v3 Hearts non-face on play (2-6 and 7-10).
+ * Called from the play pipeline for active Hearts cards of low/mid tier.
+ */
+export function handleHeartsNonFaceOnPlay(state: GameState, card: Card, player: CurrentPlayer): GameState {
+  const playerSuit = player === 1 ? state.player1Suit : state.player2Suit
+  if (!isCardActiveForEffects(card, playerSuit)) return state
+  const tier = getRankTier(card.rank)
+  if (tier === 'low') {
+    // 2-6: +3 temp regen for 3 turns
+    return addTempRegen(state, player, 3, TEMP_REGEN_DURATION_TURNS)
   }
+  if (tier === 'mid') {
+    // 7-10: instant heal for current regen x4
+    return applyInstantRegenProcs(state, player, 4)
+  }
+  return state
 }
 
 // ============================================================================
@@ -1072,29 +1028,29 @@ function handleSpadesFaceCardOnPlay(state: GameState, card: Card, player: Curren
 }
 
 /**
- * v2.2 Hearts face cards on play
- * Jack: +2 regen effect bonus (was +1)
- * Queen: +2 regen stacks (unchanged)
- * King: +1 regen, +1 regen effect (was +2/+2)
+ * v3 Hearts face cards on play
+ * Jack: instant heal for current Regen x8
+ * Queen: +4 permanent Regen
+ * King: +2 permanent Regen, then instant heal for current Regen x5
  */
 function handleHeartsFaceCardOnPlay(state: GameState, card: Card, player: CurrentPlayer): GameState {
   let newState = state
   
   switch (card.rank) {
     case 'J':
-      // v2.2 Jack: +2 regen effect bonus (refreshes duration)
-      newState = applyRegenEffectBonusGain(newState, player, 2)
+      // v3 Jack: heal for current regen x8
+      newState = applyInstantRegenProcs(newState, player, 8)
       break
       
     case 'Q':
-      // Queen: +2 regen stacks (refreshes duration) - unchanged
-      newState = applyRegenGain(newState, player, 2)
+      // v3 Queen: +4 permanent regen
+      newState = addPermanentRegen(newState, player, 4)
       break
       
     case 'K':
-      // v2.2 King: +1 regen effect bonus AND +1 regen stacks (was +2/+2)
-      newState = applyRegenEffectBonusGain(newState, player, 1)
-      newState = applyRegenGain(newState, player, 1)
+      // v3 King: +2 permanent regen, then heal for current regen x5 (procs benefit from the +2)
+      newState = addPermanentRegen(newState, player, 2)
+      newState = applyInstantRegenProcs(newState, player, 5)
       break
       
     default:
@@ -1232,53 +1188,35 @@ export function processBleedTicks(state: GameState, player: CurrentPlayer): Game
 }
 
 /**
- * Process Regen ticks at start of turn
- * v2.2: Regen works like bleed - each instance is processed independently
- * Each instance has its own duration that doesn't refresh
- * Healing is multiplied by (1 + regenEffectBonus)
+ * v3 Process Regen ticks at start of turn
+ * - Ticks only on the Hearts player's own turn
+ * - Heals for regenPermanent + sum of all temp instance healingPerTurn
+ * - Decrements each temp instance by 1 and drops expired
+ * - regenPermanent is never touched; legacy bonus fields are untouched
  */
 export function processRegenTicks(state: GameState, player: CurrentPlayer, isPlayersTurn: boolean): GameState {
   const playerState = player === 1 ? state.player1 : state.player2
   const playerSuit = player === 1 ? state.player1Suit : state.player2Suit
   
-  // v2: Regen only ticks on the Hearts player's OWN turn
+  // Regen only ticks on the Hearts player's OWN turn
   if (playerSuit !== 'hearts' || !isPlayersTurn) {
     return state
   }
   
-  // Check if player has any active regen instances
-  if (playerState.regenStacks.length === 0) {
+  const permanent = playerState.regenPermanent
+  const tempSum = playerState.regenStacks.reduce((sum, s) => sum + s.healingPerTurn, 0)
+  const totalHealing = permanent + tempSum
+  
+  // Decrement temp instances and drop expired
+  const updatedStacks = playerState.regenStacks
+    .map(stack => ({ ...stack, turnsRemaining: stack.turnsRemaining - 1 }))
+    .filter(stack => stack.turnsRemaining > 0)
+  
+  if (totalHealing <= 0 && updatedStacks.length === playerState.regenStacks.length) {
     return state
   }
   
-  // Calculate total base healing from all instances
-  const baseHealing = playerState.regenStacks.reduce((sum, stack) => sum + stack.healingPerTurn, 0)
-  
-  // Apply effect bonus multiplier
-  const bonusMultiplier = 1 + playerState.regenEffectBonus
-  const totalHealing = Math.floor(baseHealing * bonusMultiplier)
-  
-  // Decrement turns remaining for each instance and filter out expired ones
-  const updatedStacks = playerState.regenStacks
-    .map(stack => ({
-      ...stack,
-      turnsRemaining: stack.turnsRemaining - 1
-    }))
-    .filter(stack => stack.turnsRemaining > 0)
-  
-  // Also decrement bonus turns (bonus expires independently)
-  let newBonusTurns = playerState.regenEffectBonusTurnsRemaining
-  let newBonus = playerState.regenEffectBonus
-  
-  if (newBonusTurns > 0) {
-    newBonusTurns -= 1
-    if (newBonusTurns <= 0) {
-      newBonus = 0
-      newBonusTurns = 0
-    }
-  }
-  
-  console.log(`[Hearts Regen Tick] Player ${player}: Healed ${totalHealing} HP (base: ${baseHealing}/turn × ${bonusMultiplier} bonus). Active instances: ${updatedStacks.length}`)
+  console.log(`[Hearts Regen v3 Tick] Player ${player}: Healed ${totalHealing} HP (perm: ${permanent}, temp: ${tempSum}). Temp instances remaining: ${updatedStacks.length}`)
   
   if (player === 1) {
     return {
@@ -1286,9 +1224,7 @@ export function processRegenTicks(state: GameState, player: CurrentPlayer, isPla
       player1: {
         ...state.player1,
         hp: state.player1.hp + totalHealing,
-        regenStacks: updatedStacks,
-        regenEffectBonus: newBonus,
-        regenEffectBonusTurnsRemaining: newBonusTurns
+        regenStacks: updatedStacks
       }
     }
   } else {
@@ -1297,9 +1233,7 @@ export function processRegenTicks(state: GameState, player: CurrentPlayer, isPla
       player2: {
         ...state.player2,
         hp: state.player2.hp + totalHealing,
-        regenStacks: updatedStacks,
-        regenEffectBonus: newBonus,
-        regenEffectBonusTurnsRemaining: newBonusTurns
+        regenStacks: updatedStacks
       }
     }
   }
@@ -1362,9 +1296,9 @@ export function applyClubsReplacement(
   const newHand = [...playerState.hand]
   newHand[handCardIndex] = replacementCard
   
-  // Add replaced card to discard
-  const newDiscard = [...state.discardPile, replacedCard]
-  
+  // v4 Shared Deck: replaced card goes to the hidden out-of-play pile
+  const newOutOfPlay = [...state.outOfPlayPile, replacedCard]
+
   if (player === 1) {
     return {
       ...state,
@@ -1372,7 +1306,7 @@ export function applyClubsReplacement(
         ...state.player1,
         hand: newHand
       },
-      discardPile: newDiscard
+      outOfPlayPile: newOutOfPlay
     }
   } else {
     return {
@@ -1381,7 +1315,7 @@ export function applyClubsReplacement(
         ...state.player2,
         hand: newHand
       },
-      discardPile: newDiscard
+      outOfPlayPile: newOutOfPlay
     }
   }
 }
@@ -1486,47 +1420,19 @@ export function moveCardBetweenLanes(
     return lane
   })
   
-  // Update pending resolution lanes
-  let newPendingResolutionLanes = [...state.pendingResolutionLanes]
-  
-  // Check source lane - if neither side has 3+ cards, remove from pending
-  const sourceStillFilled = fromP1Cards >= 3 || fromP2Cards >= 3
-  if (!sourceStillFilled) {
-    newPendingResolutionLanes = newPendingResolutionLanes.filter(p => p.laneId !== fromLane)
-    console.log(`[Clubs Move] Source lane ${fromLane} no longer has 3+ cards - removed from pending`)
-  }
-  
-  // Check destination lane - add to pending if one side now has 3+ cards
-  const destP1Filled = toP1Cards >= 3
-  const destP2Filled = toP2Cards >= 3
-  const destAlreadyPending = newPendingResolutionLanes.some(p => p.laneId === toLane)
-  
-  // If both sides have 3 cards, mark for immediate resolution (handled by reducer)
-  // by setting turnsUntilResolution to 0
-  if (destP1Filled && destP2Filled && !destAlreadyPending) {
-    const newPending: PendingLaneResolution = {
-      laneId: toLane,
-      filledByPlayer: cardOwner,
-      turnsUntilResolution: 0, // Resolve immediately
-    }
-    newPendingResolutionLanes.push(newPending)
-    console.log(`[Clubs Move] Destination lane ${toLane} now has 3 cards on both sides - marked for immediate resolution`)
-  } else if ((destP1Filled || destP2Filled) && !destAlreadyPending) {
-    // One side filled - add to pending with countdown
-    const fillingPlayer: CurrentPlayer = destP1Filled ? 1 : 2
-    const newPending: PendingLaneResolution = {
-      laneId: toLane,
-      filledByPlayer: fillingPlayer,
-      turnsUntilResolution: 2, // Opponent gets 2 turns to respond
-    }
-    newPendingResolutionLanes.push(newPending)
-    console.log(`[Clubs Move] Destination lane ${toLane} now has 3+ cards on P${fillingPlayer} side - added to pending`)
-  }
-  
+  // v5 Round Flow: pending-resolution system removed. If this move fills both
+  // sides of the destination lane (3 vs 3), the caller is expected to trigger
+  // resolve+lock via the standard reducer path (suit effects are currently
+  // disabled, so this dead-code branch is effectively never reached anyway).
+  void fromP1Cards
+  void fromP2Cards
+  void toP1Cards
+  void toP2Cards
+  void cardOwner
+
   return {
     ...state,
     lanes: newLanes,
-    pendingResolutionLanes: newPendingResolutionLanes,
   }
 }
 

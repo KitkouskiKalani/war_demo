@@ -30,10 +30,21 @@ export interface Lobby {
   id: string;
   host_name: string;
   created_at: string;
+  match_id?: string | null;
+  host_session_token?: string | null;
+  last_heartbeat_at?: string | null;
+  status?: string | null;
 }
 
 let supabase: SupabaseClient | null = null;
 let lobbiesChannel: RealtimeChannel | null = null;
+const ACTIVE_LOBBY_MAX_AGE_MS = 90_000;
+
+function isLobbyFresh(lobby: Lobby): boolean {
+  if (lobby.status && lobby.status !== 'waiting') return false;
+  if (!lobby.last_heartbeat_at) return true;
+  return Date.now() - new Date(lobby.last_heartbeat_at).getTime() <= ACTIVE_LOBBY_MAX_AGE_MS;
+}
 
 // Check if Supabase is configured
 export function isSupabaseConfigured(): boolean {
@@ -106,7 +117,7 @@ export async function getLobbies(): Promise<Lobby[]> {
       console.error('[Supabase] Error fetching lobbies:', error);
       return [];
     }
-    return data || [];
+    return (data || []).filter(isLobbyFresh);
   } catch (err) {
     console.error('[Supabase] Error fetching lobbies:', err);
     return [];

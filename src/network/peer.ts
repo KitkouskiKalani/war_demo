@@ -9,6 +9,7 @@ import { createClient, SupabaseClient, RealtimeChannel } from '@supabase/supabas
 
 // Room code prefix
 const ROOM_PREFIX = 'game_';
+const PROTOCOL_VERSION = 1;
 
 let supabase: SupabaseClient | null = null;
 let gameChannel: RealtimeChannel | null = null;
@@ -17,6 +18,98 @@ let isHostPlayer: boolean = false;
 let actionCallback: ((action: any) => void) | null = null;
 let connectionCallback: (() => void) | null = null;
 let disconnectCallback: (() => void) | null = null;
+let presenceCallback: ((state: unknown) => void) | null = null;
+let sessionMatchId: string | null = null;
+let sessionPlayerSlot: 1 | 2 | null = null;
+let sessionToken: string | null = null;
+let outgoingSequence = 0;
+let lastReceivedSequenceBySender: Record<string, number> = {};
+let seenActionIds = new Set<string>();
+
+export interface NetworkSessionConfig {
+  matchId?: string | null;
+  playerSlot?: 1 | 2 | null;
+  sessionToken?: string | null;
+  resetSequence?: boolean;
+}
+
+export function configureSession(config: NetworkSessionConfig): void {
+  sessionMatchId = config.matchId ?? null;
+  sessionPlayerSlot = config.playerSlot ?? null;
+  sessionToken = config.sessionToken ?? null;
+  if (config.resetSequence) {
+    outgoingSequence = 0;
+    lastReceivedSequenceBySender = {};
+    seenActionIds = new Set<string>();
+  }
+}
+
+function makeActionId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function withProtocolEnvelope(action: any): any {
+  outgoingSequence += 1;
+  return {
+    ...action,
+    protocolVersion: PROTOCOL_VERSION,
+    matchId: sessionMatchId,
+    senderSlot: sessionPlayerSlot,
+    sequence: outgoingSequence,
+    actionId: action.actionId ?? makeActionId(),
+    sentAt: Date.now(),
+  };
+}
+
+function shouldDeliverIncoming(payload: any): boolean {
+  if (!payload || typeof payload !== 'object') return true;
+  if (payload.protocolVersion && payload.protocolVersion !== PROTOCOL_VERSION) {
+    console.warn('[Network] Protocol mismatch:', payload.protocolVersion, 'expected', PROTOCOL_VERSION);
+    return false;
+  }
+  if (payload.actionId && seenActionIds.has(payload.actionId)) {
+    console.warn('[Network] Duplicate action ignored:', payload.actionId);
+    return false;
+  }
+  if (payload.actionId) {
+    seenActionIds.add(payload.actionId);
+  }
+  if (payload.senderSlot && typeof payload.sequence === 'number') {
+    const key = String(payload.senderSlot);
+    const last = lastReceivedSequenceBySender[key] ?? 0;
+    if (payload.sequence > last + 1) {
+      console.warn('[Network] Sequence gap detected:', { sender: key, expected: last + 1, received: payload.sequence });
+      actionCallback?.({
+        type: 'SNAPSHOT_REQUESTED',
+        reason: 'sequence-gap',
+        expectedSequence: last + 1,
+        receivedSequence: payload.sequence,
+      });
+      return false;
+    }
+    if (payload.sequence <= last) {
+      console.warn('[Network] Out-of-order action ignored:', { sender: key, last, received: payload.sequence });
+      return false;
+    }
+    lastReceivedSequenceBySender[key] = payload.sequence;
+  }
+  return true;
+}
+
+export function trackPresence(): void {
+  if (!gameChannel || !currentRoomCode) return;
+  gameChannel.track({
+    role: isHostPlayer ? 'host' : 'guest',
+    matchId: sessionMatchId,
+    playerSlot: sessionPlayerSlot,
+    sessionToken,
+    roomCode: currentRoomCode,
+    onlineAt: new Date().toISOString(),
+  });
+}
 
 /**
  * Generate a random 6-digit numeric room code
@@ -112,7 +205,7 @@ export function createRoom(roomCode?: string): Promise<string> {
       // Listen for broadcast messages
       gameChannel.on('broadcast', { event: 'game_action' }, (payload) => {
         console.log('[Network] Received action:', payload.payload);
-        if (actionCallback) {
+        if (actionCallback && shouldDeliverIncoming(payload.payload)) {
           actionCallback(payload.payload);
         }
       });
@@ -131,6 +224,9 @@ export function createRoom(roomCode?: string): Promise<string> {
         if (disconnectCallback) {
           disconnectCallback();
         }
+      });
+      gameChannel.on('presence', { event: 'sync' }, () => {
+        presenceCallback?.(gameChannel?.presenceState());
       });
       
       // Set timeout for subscription
@@ -153,6 +249,7 @@ export function createRoom(roomCode?: string): Promise<string> {
             subscribeTimeout = null;
           }
           console.log('[Network] Room created successfully:', code);
+          trackPresence();
           resolve(code);
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
           handleFailure(`Channel error: ${status}`);
@@ -253,7 +350,7 @@ export function joinRoom(roomCode: string): Promise<void> {
       // Listen for broadcast messages
       gameChannel.on('broadcast', { event: 'game_action' }, (payload) => {
         console.log('[Network] Received action:', payload.payload);
-        if (actionCallback) {
+        if (actionCallback && shouldDeliverIncoming(payload.payload)) {
           actionCallback(payload.payload);
         }
       });
@@ -264,6 +361,9 @@ export function joinRoom(roomCode: string): Promise<void> {
         if (disconnectCallback) {
           disconnectCallback();
         }
+      });
+      gameChannel.on('presence', { event: 'sync' }, () => {
+        presenceCallback?.(gameChannel?.presenceState());
       });
       
       // Set up a timeout for joining
@@ -287,6 +387,7 @@ export function joinRoom(roomCode: string): Promise<void> {
           
           // Notify host that we joined
           try {
+            trackPresence();
             await gameChannel!.send({
               type: 'broadcast',
               event: 'player_joined',
@@ -344,11 +445,12 @@ export function sendAction(action: any): void {
     return;
   }
   
-  console.log('[Network] Sending action:', action);
+  const payload = withProtocolEnvelope(action);
+  console.log('[Network] Sending action:', payload);
   gameChannel.send({
     type: 'broadcast',
     event: 'game_action',
-    payload: action,
+    payload,
   });
 }
 
@@ -371,6 +473,14 @@ export function onConnection(callback: () => void): void {
  */
 export function onDisconnect(callback: () => void): void {
   disconnectCallback = callback;
+}
+
+export function onPresence(callback: (state: unknown) => void): void {
+  presenceCallback = callback;
+}
+
+export function getOutgoingSequence(): number {
+  return outgoingSequence;
 }
 
 /**
@@ -422,6 +532,8 @@ export function disconnect(): void {
   actionCallback = null;
   connectionCallback = null;
   disconnectCallback = null;
+  presenceCallback = null;
+  configureSession({ resetSequence: true });
   
   console.log('[Network] Disconnected and cleaned up');
 }
@@ -444,4 +556,5 @@ export function forceCleanup(): void {
   }
   currentRoomCode = null;
   isHostPlayer = false;
+  configureSession({ resetSequence: true });
 }

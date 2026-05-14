@@ -159,6 +159,7 @@ export function CardView({
     !faceDown && isActive ? 'card-active' : '',
     !faceDown && !isActive ? 'card-inactive' : '',
     isDragging ? 'card-dragging' : '',
+    !faceDown && card.minionEffect ? 'card-minion-buffed' : '',
     showTooltip ? 'tooltip-visible' : '',
     draggable && !disabled ? 'card-draggable' : '',
   ].filter(Boolean).join(' ')
@@ -309,6 +310,11 @@ export function CardView({
         className="card-image"
         draggable={false}
       />
+      {!faceDown && card.minionEffect && (
+        <span className="card-minion-badge" aria-label="Minion buff">
+          {card.minionEffect.type === 'spades-damage' ? '♠️' : '♥️'}
+        </span>
+      )}
       
       {/* Tooltip rendered in portal so it always appears on top of cards */}
       {showTooltip && tooltipData && tooltipPortalRect && typeof document !== 'undefined' && document.body &&

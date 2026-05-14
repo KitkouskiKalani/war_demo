@@ -525,6 +525,28 @@ body {
   box-shadow: none;
 }
 
+.card.card-minion-buffed {
+  box-shadow: 0 0 14px rgba(250, 204, 21, 0.9), 0 0 26px rgba(250, 204, 21, 0.55);
+}
+
+.card-minion-badge {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  z-index: 12;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #facc15;
+  border-radius: 999px;
+  background: rgba(17, 24, 39, 0.96);
+  font-size: 15px;
+  line-height: 1;
+  box-shadow: 0 0 12px rgba(250, 204, 21, 0.85);
+}
+
 /* ========================================
    CARD TOOLTIP STYLES
    ======================================== */
@@ -704,18 +726,6 @@ body {
   }
 }
 
-/* Discard pile drop target state */
-.discard-drop-target {
-  border: 2px dashed rgba(239, 68, 68, 0.4);
-  border-radius: 8px;
-}
-
-.discard-drop-target:hover,
-.discard-pile.discard-drop-target {
-  border-color: rgba(239, 68, 68, 0.8);
-  box-shadow: 0 0 15px rgba(239, 68, 68, 0.4);
-}
-
 /* Lane cards - larger to fill lane width */
 .card-small {
   width: 54px;
@@ -755,6 +765,19 @@ body {
 
 .avatar-frame.opponent {
   box-shadow: none;
+}
+
+.avatar-frame.turn-active img {
+  animation: avatar-turn-glow 1.5s ease-in-out infinite;
+}
+
+@keyframes avatar-turn-glow {
+  0%, 100% {
+    filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.9)) drop-shadow(0 0 18px rgba(34, 197, 94, 0.6));
+  }
+  50% {
+    filter: drop-shadow(0 0 14px rgba(34, 197, 94, 1)) drop-shadow(0 0 28px rgba(34, 197, 94, 0.75));
+  }
 }
 
 /* Taking damage flash animation */
@@ -821,6 +844,145 @@ body {
   opacity: 0.95;
 }
 
+.relic-icon.relic-active {
+  opacity: 1;
+  animation: support-pulse 1.5s ease-in-out infinite;
+  border-color: gold;
+  box-shadow: 0 0 15px 5px rgba(255, 215, 0, 0.6), 0 0 30px 10px rgba(255, 215, 0, 0.3);
+}
+
+.minion-icon {
+  width: 62px;
+  height: 62px;
+  margin-left: 0;
+  opacity: 0.95;
+}
+
+.minion-icon.minion-active {
+  opacity: 1;
+  animation: support-pulse 1.5s ease-in-out infinite;
+  border-color: gold;
+  box-shadow: 0 0 15px 5px rgba(255, 215, 0, 0.6), 0 0 30px 10px rgba(255, 215, 0, 0.3);
+}
+
+.minion-menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(3, 7, 18, 0.72);
+  backdrop-filter: blur(2px);
+}
+
+.minion-menu {
+  width: min(92vw, 520px);
+  max-height: 82vh;
+  overflow-y: auto;
+  padding: 18px;
+  border: 2px solid rgba(250, 204, 21, 0.85);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(17, 24, 39, 0.98), rgba(31, 41, 55, 0.98));
+  box-shadow: 0 0 30px rgba(250, 204, 21, 0.22), 0 20px 60px rgba(0, 0, 0, 0.65);
+  color: #fef3c7;
+  text-align: center;
+}
+
+.minion-menu-title {
+  margin-bottom: 14px;
+  font-size: 16px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.minion-card-options {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+}
+
+.minion-card-option {
+  padding: 6px;
+  border: 2px solid rgba(250, 204, 21, 0.45);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.78);
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.minion-card-option:hover {
+  transform: translateY(-2px);
+  border-color: #facc15;
+  box-shadow: 0 0 18px rgba(250, 204, 21, 0.35);
+}
+
+.minion-selected-card {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 14px;
+}
+
+.minion-suit-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.minion-suit-option {
+  min-height: 74px;
+  border: 2px solid rgba(250, 204, 21, 0.45);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.82);
+  color: #fef3c7;
+  cursor: pointer;
+}
+
+.minion-suit-option:hover {
+  border-color: #facc15;
+  box-shadow: 0 0 18px rgba(250, 204, 21, 0.35);
+}
+
+.minion-suit-emoji,
+.minion-suit-label {
+  display: block;
+}
+
+.minion-suit-emoji {
+  font-size: 24px;
+  margin-bottom: 4px;
+}
+
+.minion-suit-label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.minion-menu-empty {
+  padding: 20px;
+  color: #cbd5e1;
+  font-weight: 700;
+}
+
+.minion-menu-cancel {
+  margin-top: 16px;
+  padding: 8px 16px;
+  border: 1px solid rgba(148, 163, 184, 0.65);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.78);
+  color: #e5e7eb;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.minion-menu-cancel:hover {
+  border-color: #e5e7eb;
+}
+
 /* Hero row - keep avatar centered regardless of side widgets */
 .hero-float {
   display: grid;
@@ -836,6 +998,7 @@ body {
 .hero-slot-right {
   display: flex;
   align-items: center;
+  gap: 6px;
 }
 
 .hero-slot-left {
@@ -864,8 +1027,7 @@ body {
 .hero-float.player {
   margin-top: -30px;
   margin-bottom: -10px;
-  transform: scale(0.85);
-  transform-origin: center top;
+  transform: none;
 }
 
 .hero-float.player .avatar-frame {
@@ -877,6 +1039,11 @@ body {
   width: 50px;
   height: 50px;
   margin-left: 0;
+}
+
+.hero-float.player .support-icon.minion-icon {
+  width: 62px;
+  height: 62px;
 }
 
 /* Support ability available state - glowing effect */
@@ -954,7 +1121,8 @@ body {
   flex-direction: column;
   gap: 0;
   transition: all 0.3s ease;
-  width: 66px;
+  /* v6 Horizontal Stacking: widen lanes to fit 3 horizontally overlapping cards (~1.8 * card width). */
+  width: 100px;
   flex-shrink: 0;
   height: 280px;
   justify-content: center;
@@ -964,7 +1132,7 @@ body {
 @media (min-width: 640px) {
   .lane {
     padding: 5px;
-    width: 78px;
+    width: 112px;
     height: 320px;
   }
 }
@@ -977,6 +1145,14 @@ body {
 
 .lane-targetable:hover {
   box-shadow: 0 0 30px rgba(251, 191, 36, 0.6), inset 0 0 20px rgba(251, 191, 36, 0.2);
+}
+
+.lane.lane-community-locked {
+  background: linear-gradient(180deg, rgba(24, 30, 36, 0.92) 0%, rgba(33, 39, 46, 0.96) 100%);
+  border-color: rgba(31, 41, 55, 0.95);
+  box-shadow: inset 0 0 28px rgba(0, 0, 0, 0.55);
+  filter: brightness(0.72) saturate(0.65);
+  cursor: not-allowed;
 }
 
 /* Board selection mode styles (for Clubs effects) */
@@ -1018,6 +1194,39 @@ body {
   box-shadow: 0 0 35px rgba(59, 130, 246, 0.8), inset 0 0 25px rgba(59, 130, 246, 0.3) !important;
 }
 
+.lane-selection-relic-shield,
+.lane-selection-relic-sword,
+.lane-selection-relic-skull-source,
+.lane-selection-relic-skull-target {
+  cursor: pointer !important;
+  animation: pulse-selection 1s ease-in-out infinite;
+}
+
+.lane-selection-relic-shield {
+  border-color: #facc15 !important;
+  box-shadow: 0 0 25px rgba(250, 204, 21, 0.55), inset 0 0 15px rgba(250, 204, 21, 0.2) !important;
+}
+
+.lane-selection-relic-sword {
+  border-color: #fb923c !important;
+  box-shadow: 0 0 25px rgba(251, 146, 60, 0.55), inset 0 0 15px rgba(251, 146, 60, 0.2) !important;
+}
+
+.lane-selection-relic-skull-source,
+.lane-selection-relic-skull-target {
+  border-color: #22c55e !important;
+  box-shadow: 0 0 25px rgba(34, 197, 94, 0.55), inset 0 0 15px rgba(34, 197, 94, 0.2) !important;
+}
+
+.relic-card-selectable {
+  cursor: pointer;
+  filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.65));
+}
+
+.relic-card-selected {
+  filter: drop-shadow(0 0 12px rgba(34, 197, 94, 1)) drop-shadow(0 0 20px rgba(34, 197, 94, 0.7));
+}
+
 @keyframes pulse-selection {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.8; }
@@ -1025,19 +1234,22 @@ body {
 
 /* Board selection mode instructions banner */
 .board-selection-instructions {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
+  position: absolute;
+  top: 205px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 900;
   display: flex;
   justify-content: center;
   align-items: center;
   gap: 16px;
-  padding: 12px 20px;
+  width: min(390px, calc(100% - 24px));
+  padding: 10px 14px;
   background: linear-gradient(180deg, rgba(30, 41, 59, 0.98), rgba(30, 41, 59, 0.92));
-  border-bottom: 2px solid rgba(168, 85, 247, 0.5);
+  border: 2px solid rgba(168, 85, 247, 0.5);
+  border-radius: 10px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
 }
 
 .board-selection-text {
@@ -1063,6 +1275,42 @@ body {
 .board-selection-cancel:hover {
   background: rgba(239, 68, 68, 0.4);
   border-color: rgba(239, 68, 68, 0.8);
+}
+
+.relic-targeting-dim {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.58);
+  pointer-events: none;
+}
+
+.relic-targeting-active .board-area {
+  position: relative;
+  z-index: 200;
+}
+
+.relic-targeting-active .board-row,
+.relic-targeting-active .lanes-container {
+  z-index: auto;
+}
+
+.relic-targeting-active .board-area::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: rgba(0, 0, 0, 0.58);
+  pointer-events: none;
+}
+
+.relic-targeting-active .lane {
+  position: relative;
+  z-index: 30;
+}
+
+.relic-targeting-active .board-selection-instructions {
+  z-index: 900;
 }
 
 /* Lane glow effects for pending resolution */
@@ -1126,56 +1374,115 @@ body {
   75% { transform: translateX(-50%) rotate(2deg); }
 }
 
-.lane-label {
-  text-align: center;
-  font-weight: bold;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  padding: 2px 4px;
-  background: rgba(0, 0, 0, 0.7);
-  border-radius: 4px;
-  font-size: 8px;
-  color: #9ca3af;
+/* ========================================
+   COMMUNITY POKER CARD SLOTS (v4 Shared Deck)
+   Empty placeholder slots that will hold community cards dealt from the
+   shared deck. Per-lane slots sit in the middle of each lane; the
+   "all-lane" slot sits to the left of the lanes container.
+   ======================================== */
+.community-poker-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 55px;
+  border-radius: 6px;
+  border: 2px dashed rgba(156, 163, 175, 0.5);
+  background: rgba(0, 0, 0, 0.35);
   flex-shrink: 0;
-  margin: 2px 0;
+  box-sizing: border-box;
 }
 
+.community-poker-slot.lane-community-slot {
+  width: 52px;
+  height: 72px;
+  margin: 4px 0;
+  align-self: center;
+}
+
+.community-poker-slot.all-lane-community-slot {
+  width: 52px;
+  height: 72px;
+  align-self: center;
+}
+
+.community-slot-arrow {
+  color: #fbbf24;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.community-poker-slot.community-slot-locked {
+  border-style: solid;
+  border-color: rgba(248, 113, 113, 0.65);
+  background: rgba(0, 0, 0, 0.62);
+  box-shadow: inset 0 0 14px rgba(0, 0, 0, 0.75), 0 0 10px rgba(248, 113, 113, 0.18);
+}
+
+.lane-lock-icon {
+  font-size: 22px;
+  line-height: 1;
+  filter: drop-shadow(0 0 6px rgba(248, 113, 113, 0.65));
+}
+
+/* v5 Round Flow + Lane Locking: community card rendered inside a slot.
+   Size the CardView to fit neatly within the slot's fixed dimensions. */
+.community-poker-slot .card,
+.community-poker-slot .card.card-small {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+.community-poker-slot .card:hover:not(.card-disabled) {
+  transform: none;
+  box-shadow: none;
+}
+
+/* Empty community slots lock when the deck cannot refill that lane. */
+
 @media (min-width: 640px) {
-  .lane-label {
-    font-size: 10px;
-    padding: 4px 6px;
+  .community-poker-slot.lane-community-slot {
+    width: 60px;
+    height: 84px;
+  }
+
+  .community-poker-slot.all-lane-community-slot {
+    width: 58px;
+    height: 82px;
   }
 }
 
-/* Vertical card stacking in lanes */
+/* v6 Horizontal card stacking in lanes.
+   Cards render left-to-right in play order. Each subsequent card overlaps the prior by 60% of its width
+   (only ~40% of each earlier card shows). Later-played cards render on top via ascending z-index. */
 .lane-cards-stack {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
+  justify-content: center;
   flex: 1;
   min-height: 0;
   position: relative;
 }
 
-.lane-cards-stack.opponent {
-  justify-content: flex-end;
-}
-
+.lane-cards-stack.opponent,
 .lane-cards-stack.player {
-  justify-content: flex-start;
+  justify-content: center;
 }
 
 .stacked-card {
   position: relative;
 }
 
+/* Overlap: shift each subsequent card left by 60% of the card's width. */
 .lane-cards-stack .stacked-card:not(:first-child) {
-  margin-top: -50px;
+  margin-left: -36px; /* ~67% of 54px card - tighter to fit slimmer lanes */
 }
 
 @media (min-width: 640px) {
   .lane-cards-stack .stacked-card:not(:first-child) {
-    margin-top: -55px;
+    margin-left: -40px; /* ~67% of 60px card - tighter to fit slimmer lanes */
   }
 }
 
@@ -1191,14 +1498,6 @@ body {
 /* ========================================
    DRAW PILE STYLING
    ======================================== */
-
-.draw-piles-column {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  align-items: center;
-  flex-shrink: 0;
-}
 
 .draw-pile {
   position: relative;
@@ -1272,63 +1571,15 @@ body {
 }
 
 /* ========================================
-   DISCARD PILE & END TURN - Right side
+   SHARED DECK + END TURN - Right side (v4)
    ======================================== */
 
 .side-action-right {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: 10px;
   flex-shrink: 0;
-}
-
-.discard-pile {
-  width: 40px;
-  height: 55px;
-  border-radius: 5px;
-  border: 2px dashed #4a3a6a;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.3s ease;
-  flex-shrink: 0;
-  position: relative;
-  overflow: hidden;
-  margin-bottom: 12px; /* Add spacing between discard and end turn button */
-}
-
-.discard-image {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: 4px;
-  opacity: 0.7;
-}
-
-.discard-count {
-  position: absolute;
-  bottom: 2px;
-  right: 2px;
-  background: rgba(0, 0, 0, 0.85);
-  color: #9ca3af;
-  font-size: 9px;
-  font-weight: bold;
-  padding: 1px 4px;
-  border-radius: 3px;
-}
-
-.discard-pile-targetable {
-  border-color: #f97316;
-  border-style: solid;
-  box-shadow: 0 0 20px rgba(249, 115, 22, 0.5);
-  cursor: pointer;
-}
-
-.discard-pile-targetable:hover {
-  box-shadow: 0 0 30px rgba(249, 115, 22, 0.7);
-  transform: scale(1.05);
 }
 
 .end-turn-btn {
@@ -1384,7 +1635,11 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  justify-content: center;
+  justify-content: flex-end;
+  width: 100%;
+  max-width: 430px;
+  padding-right: 18px;
+  margin-top: 4px;
 }
 
 .phase-banner {
@@ -1564,18 +1819,81 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 4px;
+  position: relative;
 }
 
-/* Lane total displays - outside the lane */
+.lane-special-effects {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 3px;
+  align-items: center;
+  justify-content: center;
+  z-index: 12;
+  pointer-events: none;
+}
+
+.lane-special-effects.opponent {
+  top: -16px;
+}
+
+.lane-special-effects.player {
+  bottom: -16px;
+}
+
+.lane-special-effect {
+  min-width: 18px;
+  min-height: 18px;
+  padding: 1px 4px;
+  border-radius: 999px;
+  border: 1px solid rgba(250, 204, 21, 0.9);
+  background: rgba(0, 0, 0, 0.75);
+  color: #facc15;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-align: center;
+  box-shadow: 0 0 8px rgba(250, 204, 21, 0.45);
+}
+
+.lane-special-effect.shield {
+  font-size: 13px;
+  padding: 1px 3px;
+}
+
+/* Lane total displays - outside the lane.
+   Fixed-height flex column so that:
+     - A '—' cell (no hand played yet)
+     - A short label cell (e.g. "Pair")
+     - A long label cell that wraps to 2 lines (e.g. "3-Card Straight Flush")
+   all occupy the EXACT same height, keeping the three lanes vertically
+   aligned regardless of which player has played a hand in which lane. */
 .lane-total {
   font-size: 14px;
   font-weight: 700;
   min-width: 30px;
+  height: 50px;
   text-align: center;
   padding: 2px 6px;
   border-radius: 4px;
   background: rgba(0, 0, 0, 0.5);
   color: #6b7280;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+/* The numeric "base | bonus" row stays a single inline row inside the flex column. */
+.lane-total .lane-total-number {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  white-space: nowrap;
+  line-height: 1;
 }
 
 .lane-total.has-value {
@@ -1608,11 +1926,35 @@ body {
   text-shadow: 0 0 6px rgba(251, 191, 36, 0.6);
 }
 
+/* v6 Poker Rework: hand-type label below the numeric total.
+   Allowed to wrap up to 2 lines; the cell is sized to fit a 2-line label so
+   wrapping never grows the cell or pushes the lane around. */
+.lane-total .hand-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  opacity: 0.85;
+  margin-top: 2px;
+  letter-spacing: 0.2px;
+  text-shadow: none;
+  line-height: 1.1;
+  max-width: 100%;
+  overflow-wrap: break-word;
+}
+
+@media (min-width: 640px) {
+  .lane-total .hand-label {
+    font-size: 11px;
+    margin-top: 3px;
+  }
+}
+
 @media (min-width: 640px) {
   .lane-total {
     font-size: 16px;
     padding: 3px 8px;
     min-width: 36px;
+    height: 58px;
   }
   
   .lane-total .bonus-separator {
@@ -1715,13 +2057,13 @@ body {
   }
 
   .lane {
-    width: 86px;
-    height: 360px;
+    width: 118px;
+    height: 340px;
     padding: 3px;
   }
 
   .lanes-container {
-    gap: 6px;
+    gap: 4px;
   }
 
   .board-row {
@@ -1729,12 +2071,12 @@ body {
   }
 
   .card-small {
-    width: 72px;
-    height: 100px;
+    width: 66px;
+    height: 92px;
   }
 
   .lane-cards-stack .stacked-card:not(:first-child) {
-    margin-top: -72px;
+    margin-left: -44px; /* ~67% of 66px card - tighter so 3 cards fit inside slim lane */
   }
 
   .draw-pile .card-small {
@@ -1745,16 +2087,6 @@ body {
   .draw-pile-empty-outline {
     width: 36px;
     height: 50px;
-  }
-
-  .discard-pile {
-    width: 36px;
-    height: 50px;
-  }
-
-  .discard-image {
-    width: 100%;
-    height: 100%;
   }
 
   .end-turn-btn {
@@ -1796,6 +2128,12 @@ body {
     width: 42px;
     height: 42px;
     margin-left: 0;
+  }
+
+  .hero-float.opponent .support-icon.minion-icon,
+  .hero-float.player .support-icon.minion-icon {
+    width: 58px;
+    height: 58px;
   }
 
   .hero-meta-row {
@@ -1853,6 +2191,7 @@ body {
 
   .phase-row {
     margin-top: 0;
+    padding-right: 28px;
   }
 
   .hint-text {
@@ -2522,6 +2861,24 @@ body {
   color: #22c55e;
   text-shadow: 0 0 40px rgba(34, 197, 94, 0.8), 0 0 80px rgba(34, 197, 94, 0.5);
   animation: popup-scale 1.5s ease-out;
+}
+
+.connection-status-banner {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1200;
+  padding: 0.5rem 0.9rem;
+  border: 2px solid rgba(250, 204, 21, 0.9);
+  border-radius: 999px;
+  background: rgba(17, 24, 39, 0.92);
+  color: #fef3c7;
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  box-shadow: 0 0 18px rgba(250, 204, 21, 0.25);
 }
 
 @keyframes popup-scale {

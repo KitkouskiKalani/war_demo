@@ -1,15 +1,18 @@
 /**
  * AI for War-Lanes Poker
- * 
+ *
  * AI Strategy (v2 - Improved):
  * 1. URGENCY: Respond to lanes where player has 3 cards (pending resolution)
  * 2. COMPLETE: Try to complete lanes where AI has 2 cards
  * 3. BUILD: Continue building in lanes where AI has cards
  * 4. START: Start new lanes with lowest value cards
- * 5. DISCARD: Only as last resort (no legal plays)
- * 
+ *
+ * v4 Shared Deck System: discard is no longer a legal action, so the AI
+ * never produces a 'discard' move. If no legal play exists, getAIMove
+ * returns null and the executor ends the turn.
+ *
  * General principle: Play lowest cards first, save high cards for later
- * 
+ *
  * v2 Ability System:
  * - AI handles effect choices automatically
  * - Chooses randomly among valid options for simplicity
@@ -20,7 +23,7 @@ import { cardValue } from './deck';
 import { canPlayCardToLane } from './reducer';
 
 export interface AIMove {
-  type: 'lane' | 'discard';
+  type: 'lane';
   cardId: string;
   laneId?: LaneId;
 }
@@ -51,9 +54,10 @@ export function getAIMove(state: GameState): AIMove | null {
     return strategicMove;
   }
 
-  // Priority 5: Discard lowest card as last resort
-  const lowestCard = sortedHand[0];
-  return { type: 'discard', cardId: lowestCard.id };
+  // v4 Shared Deck: no discard fallback. If no legal play is available,
+  // the caller will end the turn. Lockout edge cases will be handled by
+  // future suit-system changes.
+  return null;
 }
 
 /**
@@ -167,15 +171,7 @@ function simulateMove(state: GameState, move: AIMove): GameState {
   const card = hand[cardIndex];
   hand.splice(cardIndex, 1);
 
-  if (move.type === 'discard') {
-    return {
-      ...state,
-      player2: { ...state.player2, hand, hp: state.player2.hp - cardValue(card) },
-      discardPile: [...state.discardPile, card],
-      cardsPlayedThisTurn: state.cardsPlayedThisTurn + 1,
-    };
-  }
-
+  // v4 Shared Deck: only lane plays are supported.
   // Lane play
   const lanes = state.lanes.map(lane => {
     if (lane.id !== move.laneId) return lane;
@@ -205,7 +201,6 @@ export type AIEffectChoiceAction =
   | { type: 'EFFECT_CHOICE_CLUBS_QUEEN_DELAY'; targetLaneId: LaneId }
   | { type: 'EFFECT_CHOICE_DIAMONDS_ACE'; choice: 'charges' | 'chargePower' }  // v2.2
   | { type: 'EFFECT_CHOICE_DIAMONDS_QUEEN'; choice: 'damage' | 'heal' }
-  | { type: 'EFFECT_CHOICE_HEARTS_ACE'; choice: 'regen' | 'regenEffect' }  // v2.2
   | { type: 'EFFECT_CHOICE_SPADES_ACE'; choice: 'bloodDebt' | 'bleed' }  // v2.2
   | { type: 'DISMISS_EFFECT_CHOICE' }
 
@@ -241,8 +236,6 @@ export function getAIEffectChoice(state: GameState): AIEffectChoiceAction | null
       return handleAIDiamondsAce(state)
     case 'diamonds-queen-spend':
       return handleAIDiamondsQueen(state)
-    case 'hearts-ace-regen-choice':
-      return handleAIHeartsAce(state)
     case 'spades-ace-choice':
       return handleAISpadesAce(state)
     default:
@@ -283,34 +276,18 @@ function handleAIClubsReplacement(state: GameState): AIEffectChoiceAction {
  */
 function handleAIClubsQueenDelay(state: GameState, sourceLaneId?: LaneId): AIEffectChoiceAction {
   const laneIds: LaneId[] = ['left', 'middle', 'right']
-  
-  // Get available lanes (exclude source lane and already delayed lanes)
-  const availableLanes = laneIds.filter(laneId => {
-    if (laneId === sourceLaneId) return false
-    if (state.laneDelayedUntilTurn[laneId]) return false
-    return true
-  })
-  
+
+  // v5 Round Flow: pending-resolution / laneDelayed systems removed. The
+  // Clubs-Queen delay effect is a no-op while suit effects are disabled.
+  // Kept here as dead-code-friendly fallback so the AI can still pick a
+  // target lane if effects are ever re-enabled.
+  const availableLanes = laneIds.filter(laneId => laneId !== sourceLaneId)
+
   if (availableLanes.length === 0) {
     return { type: 'DISMISS_EFFECT_CHOICE' }
   }
-  
-  // Prioritize lanes with pending resolutions (delay opponent's lane resolution)
-  const pendingLanes = availableLanes.filter(laneId => 
-    state.pendingResolutionLanes.some(p => p.laneId === laneId && p.filledByPlayer === 1)
-  )
-  
-  if (pendingLanes.length > 0) {
-    // Pick the pending lane with the shortest resolution time
-    const sortedPending = pendingLanes.sort((a, b) => {
-      const pendingA = state.pendingResolutionLanes.find(p => p.laneId === a)!
-      const pendingB = state.pendingResolutionLanes.find(p => p.laneId === b)!
-      return pendingA.turnsUntilResolution - pendingB.turnsUntilResolution
-    })
-    return { type: 'EFFECT_CHOICE_CLUBS_QUEEN_DELAY', targetLaneId: sortedPending[0] }
-  }
-  
-  // Otherwise, delay a lane where player has more cards
+
+  // Delay a lane where player has more cards
   const sortedByPlayerCards = availableLanes.sort((a, b) => {
     const laneA = state.lanes.find(l => l.id === a)!
     const laneB = state.lanes.find(l => l.id === b)!
@@ -418,22 +395,6 @@ function handleAIDiamondsAce(state: GameState): AIEffectChoiceAction {
   }
   
   return { type: 'EFFECT_CHOICE_DIAMONDS_ACE', choice: 'chargePower' }
-}
-
-/**
- * v2.2 AI handles Hearts Ace choice.
- * Strategy: Prefer regen effect if already has regen instances, otherwise prefer new regen
- */
-function handleAIHeartsAce(state: GameState): AIEffectChoiceAction {
-  const regenInstances = state.player2.regenStacks
-  
-  // If already has regen instances, boost the effect multiplier
-  if (regenInstances.length > 0) {
-    return { type: 'EFFECT_CHOICE_HEARTS_ACE', choice: 'regenEffect' }
-  }
-  
-  // Otherwise, prefer more regen instances
-  return { type: 'EFFECT_CHOICE_HEARTS_ACE', choice: 'regen' }
 }
 
 /**
