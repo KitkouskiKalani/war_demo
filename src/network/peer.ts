@@ -24,7 +24,17 @@ let sessionPlayerSlot: 1 | 2 | null = null;
 let sessionToken: string | null = null;
 let outgoingSequence = 0;
 let lastReceivedSequenceBySender: Record<string, number> = {};
+// Tracked separately from incremental actions: full-state snapshots are
+// idempotent, so we only guard against applying a strictly older one.
+let lastSnapshotSequenceBySender: Record<string, number> = {};
 let seenActionIds = new Set<string>();
+
+// Idempotent, self-contained full-state messages. The latest one always wins
+// and a dropped one is harmless, so these must never be gap-rejected.
+const SNAPSHOT_MESSAGE_TYPES = new Set(['STATE_SYNC', 'FLIP_RESULT_SYNC']);
+// Recovery/control messages that must always be delivered (never gap-rejected),
+// otherwise a dropped one could leave a client permanently stuck.
+const ALWAYS_DELIVER_MESSAGE_TYPES = new Set(['REQUEST_SNAPSHOT', 'SNAPSHOT_REQUESTED']);
 
 export interface NetworkSessionConfig {
   matchId?: string | null;
@@ -40,6 +50,7 @@ export function configureSession(config: NetworkSessionConfig): void {
   if (config.resetSequence) {
     outgoingSequence = 0;
     lastReceivedSequenceBySender = {};
+    lastSnapshotSequenceBySender = {};
     seenActionIds = new Set<string>();
   }
 }
@@ -64,6 +75,19 @@ function withProtocolEnvelope(action: any): any {
   };
 }
 
+/**
+ * Ask for an authoritative resync after a gap in incremental actions.
+ * The host is the source of truth, so it triggers an immediate re-broadcast of
+ * its own state; the guest asks the host over the wire for a fresh snapshot.
+ */
+function requestResyncOnGap(reason: string): void {
+  if (isHostPlayer) {
+    actionCallback?.({ type: 'SNAPSHOT_REQUESTED', reason });
+  } else {
+    sendAction({ type: 'REQUEST_SNAPSHOT', reason });
+  }
+}
+
 function shouldDeliverIncoming(payload: any): boolean {
   if (!payload || typeof payload !== 'object') return true;
   if (payload.protocolVersion && payload.protocolVersion !== PROTOCOL_VERSION) {
@@ -77,22 +101,48 @@ function shouldDeliverIncoming(payload: any): boolean {
   if (payload.actionId) {
     seenActionIds.add(payload.actionId);
   }
+
+  const messageType = payload.type;
+
+  // Control/recovery messages must always get through.
+  if (ALWAYS_DELIVER_MESSAGE_TYPES.has(messageType)) {
+    return true;
+  }
+
+  // Full-state snapshots are idempotent and self-contained. NEVER gap-reject
+  // them: a single dropped snapshot must not block every later one (that would
+  // permanently brick the client, since the snapshot is also the recovery
+  // path). We only ignore a snapshot that is strictly older than the newest one
+  // we've already applied, so a late/reordered snapshot can't roll state back.
+  if (SNAPSHOT_MESSAGE_TYPES.has(messageType)) {
+    if (payload.senderSlot && typeof payload.sequence === 'number') {
+      const key = String(payload.senderSlot);
+      const lastSnap = lastSnapshotSequenceBySender[key] ?? 0;
+      if (payload.sequence <= lastSnap) {
+        return false;
+      }
+      lastSnapshotSequenceBySender[key] = payload.sequence;
+    }
+    return true;
+  }
+
+  // Order-dependent incremental actions (GAME_ACTION, SUIT_SELECTED, ...).
   if (payload.senderSlot && typeof payload.sequence === 'number') {
     const key = String(payload.senderSlot);
     const last = lastReceivedSequenceBySender[key] ?? 0;
-    if (payload.sequence > last + 1) {
-      console.warn('[Network] Sequence gap detected:', { sender: key, expected: last + 1, received: payload.sequence });
-      actionCallback?.({
-        type: 'SNAPSHOT_REQUESTED',
-        reason: 'sequence-gap',
-        expectedSequence: last + 1,
-        receivedSequence: payload.sequence,
-      });
-      return false;
-    }
     if (payload.sequence <= last) {
       console.warn('[Network] Out-of-order action ignored:', { sender: key, last, received: payload.sequence });
       return false;
+    }
+    if (payload.sequence > last + 1) {
+      // We missed one or more actions. Do NOT brick the channel by freezing the
+      // cursor: advance it, ask for an authoritative snapshot to repair any
+      // divergence, and still deliver this action (the host continuously
+      // re-broadcasts full state, so any drift self-corrects within a beat).
+      console.warn('[Network] Sequence gap - advancing and requesting resync:', { sender: key, expected: last + 1, received: payload.sequence });
+      lastReceivedSequenceBySender[key] = payload.sequence;
+      requestResyncOnGap('sequence-gap');
+      return true;
     }
     lastReceivedSequenceBySender[key] = payload.sequence;
   }

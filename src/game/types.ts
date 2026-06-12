@@ -30,6 +30,7 @@ export type LaneId = 'left' | 'middle' | 'right';
 export type RelicType = 'shield' | 'skull' | 'sword';
 
 export type RelicAvailability = Record<RelicType, boolean>;
+export type RelicStacks = Record<RelicType, number>;
 
 export interface RelicLaneEffects {
   shielded: boolean;
@@ -98,7 +99,10 @@ export interface PlayerState {
   hp: number;
   hand: Card[];
   relicsAvailable: RelicAvailability;
+  relicStacks: RelicStacks;
   minionAvailable: boolean;
+  minionStacks: number;
+  lastEndTurnDrawCardIds: string[];
   // v2 Ability System - Persistent Buffs/Status
   bloodDebtStacks: number;      // Spades 2-6: consumed on next lane win for bonus damage
   bleedStacks: BleedStack[];    // Spades 7-10: deals damage at start of turn
@@ -161,6 +165,12 @@ export interface LaneResolutionResult {
   // v6 Poker Rework: record the best hand each side formed so UI can label the winning hand
   player1HandType?: import('./pokerBonuses').HandType;
   player2HandType?: import('./pokerBonuses').HandType;
+  player1Cards?: Card[];
+  player2Cards?: Card[];
+  player1BaseDamage?: number;
+  player2BaseDamage?: number;
+  player1PokerBonus?: number;
+  player2PokerBonus?: number;
 }
 
 // v2 Ability System - Effect tracking for UI display
@@ -194,11 +204,22 @@ export interface GameState {
   player1: PlayerState;
   player2: PlayerState;
   lanes: Lane[];
-  // v4 Shared Deck System: single community deck both players draw from,
-  // and a hidden pile for cards that are out of play until the next round.
-  sharedDeck: Card[];
+  // v8 Split Deck System: each player draws their hand cards exclusively from
+  // their own personal deck, guaranteeing both players draw the same number of
+  // cards each round (no more uneven dealing when a single shared deck bottoms
+  // out). The communityDeck is a neutral pile that feeds the per-lane community
+  // slots and the War Flip, so community draws never disturb the player split.
+  // A hidden out-of-play pile holds spent cards until they are reshuffled and
+  // re-partitioned at the start of the next round.
+  player1Deck: Card[];
+  player2Deck: Card[];
+  communityDeck: Card[];
   outOfPlayPile: Card[];
   currentPlayer: CurrentPlayer;
+  // The player who takes the first turn of the current round (War Flip winner).
+  // Used to end the round only after the second player's matching turn so both
+  // players always take an equal number of turns.
+  roundStartingPlayer: CurrentPlayer;
   roundNumber: number;
   player1FinalTurnDone: boolean;
   player2FinalTurnDone: boolean;
@@ -209,7 +230,7 @@ export interface GameState {
   flipResult: FlipResult | null;
   fieldControlSuit: StandardSuit | null;
   // v7 Cycling Lane Flow
-  // - laneCommunityCards: per-lane community card. Refreshed (discarded + redrawn from sharedDeck)
+  // - laneCommunityCards: per-lane community card. Refreshed (discarded + redrawn from communityDeck)
   //   every time that lane resolves, so a single round can cycle through several community cards
   //   per lane.
   // - allLaneCommunityCard: only refreshed at round end (when both players' hands are empty),

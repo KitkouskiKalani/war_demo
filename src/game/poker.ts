@@ -15,14 +15,14 @@
  *     and contributes that rank's value.
  *   - In straights / straight-flushes a joker fills the missing rank slot and contributes that
  *     slot's rank value.
- *   - In a pure flush (no straight), a joker acts as an Ace (value 14) to maximize damage.
- *   - In high-card / unused positions, a joker keeps its intrinsic value of 15.
+ *   - In a pure flush (no straight), a joker acts as an Ace (value 12) to maximize damage.
+ *   - In high-card / unused positions, a joker is capped at Ace value (12).
  *
- * Ace plays as 14 for damage everywhere, including when used as "1" in an A-2-3-4-5 straight.
+ * J/Q/K each deal 11 damage. Ace and Joker each deal 12 damage.
  */
 
 import type { Card, StandardSuit } from './types';
-import { isJoker, rankValue, STANDARD_SUITS } from './deck';
+import { isJoker, rankOrderValue, rankValue, STANDARD_SUITS } from './deck';
 import { HAND_LABELS, handRankIndex, POKER_BONUSES, type HandType } from './pokerBonuses';
 
 export type { HandType } from './pokerBonuses';
@@ -38,10 +38,16 @@ export interface BestHand {
 
 const ALL_RANK_VALUES: number[] = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 
+function damageForRankOrderValue(value: number): number {
+  if (value >= 11 && value <= 13) return 11;
+  if (value === 14) return 12;
+  return value;
+}
+
 function countByRank(cards: Card[]): Map<number, Card[]> {
   const map = new Map<number, Card[]>();
   for (const c of cards) {
-    const v = rankValue(c.rank);
+    const v = rankOrderValue(c.rank);
     if (!map.has(v)) map.set(v, []);
     map.get(v)!.push(c);
   }
@@ -85,7 +91,7 @@ function tryNofAKind(regulars: Card[], jokers: Card[], n: 2 | 3 | 4 | 5): BestHa
   for (const v of ALL_RANK_VALUES) {
     const have = counts.get(v) ?? [];
     if (have.length + J < n) continue;
-    const damage = n * v;
+    const damage = n * damageForRankOrderValue(v);
     if (damage > bestDamage) {
       const usedReal = Math.min(have.length, n);
       const usedJokers = n - usedReal;
@@ -114,7 +120,7 @@ function tryTwoPair(regulars: Card[], jokers: Card[]): BestHand | null {
       const neededJokersA = Math.max(0, 2 - haveA.length);
       const neededJokersB = Math.max(0, 2 - haveB.length);
       if (neededJokersA + neededJokersB > J) continue;
-      const damage = 2 * vA + 2 * vB;
+      const damage = 2 * damageForRankOrderValue(vA) + 2 * damageForRankOrderValue(vB);
       if (damage > bestDamage) {
         const usedRealA = Math.min(2, haveA.length);
         const usedRealB = Math.min(2, haveB.length);
@@ -148,7 +154,7 @@ function tryFullHouse(regulars: Card[], jokers: Card[]): BestHand | null {
       const neededJokersA = Math.max(0, 3 - haveA.length);
       const neededJokersB = Math.max(0, 2 - haveB.length);
       if (neededJokersA + neededJokersB > J) continue;
-      const damage = 3 * vA + 2 * vB;
+      const damage = 3 * damageForRankOrderValue(vA) + 2 * damageForRankOrderValue(vB);
       if (damage > bestDamage) {
         const usedRealA = Math.min(3, haveA.length);
         const usedRealB = Math.min(2, haveB.length);
@@ -185,7 +191,7 @@ function tryFlush(regulars: Card[], jokers: Card[], k: 3 | 4 | 5): BestHand | nu
       if (realsUsed > sorted.length) continue;
       const topReals = sorted.slice(0, realsUsed);
       const realSum = topReals.reduce((sum, c) => sum + rankValue(c.rank), 0);
-      const jokerSum = jUsed * 14; // Joker acts as Ace in pure flush
+      const jokerSum = jUsed * 12; // Joker acts as Ace in pure flush
       const damage = realSum + jokerSum;
       if (damage > bestDamage) {
         bestDamage = damage;
@@ -200,7 +206,7 @@ function tryFlush(regulars: Card[], jokers: Card[], k: 3 | 4 | 5): BestHand | nu
 
 interface StraightWindow {
   values: number[];        // 1 is used as "ace-low" placeholder
-  damageValues: number[];  // ace-low position still contributes 14 for damage
+  damageValues: number[];  // ace-low position still contributes Ace damage
 }
 
 function generateStraightWindows(k: 3 | 4 | 5): StraightWindow[] {
@@ -210,7 +216,7 @@ function generateStraightWindows(k: 3 | 4 | 5): StraightWindow[] {
     const damageValues: number[] = [];
     for (let i = 0; i < k; i++) {
       values.push(s + i);
-      damageValues.push(s + i);
+      damageValues.push(damageForRankOrderValue(s + i));
     }
     windows.push({ values, damageValues });
   }
@@ -220,7 +226,7 @@ function generateStraightWindows(k: 3 | 4 | 5): StraightWindow[] {
   for (let i = 0; i < k; i++) {
     const positionValue = 1 + i;
     aceLowValues.push(positionValue);
-    aceLowDmg.push(positionValue === 1 ? 14 : positionValue);
+    aceLowDmg.push(positionValue === 1 ? 12 : positionValue);
   }
   windows.push({ values: aceLowValues, damageValues: aceLowDmg });
   return windows;
@@ -237,7 +243,7 @@ function tryStraight(regulars: Card[], jokers: Card[], k: 3 | 4 | 5): BestHand |
     const realsUsed: Card[] = [];
     let jokersNeeded = 0;
     for (const v of w.values) {
-      const lookupValue = v === 1 ? 14 : v; // Ace-low maps to Ace rank (value 14)
+      const lookupValue = v === 1 ? 14 : v; // Ace-low maps to Ace rank
       const pool = counts.get(lookupValue);
       if (pool && pool.length > 0) {
         realsUsed.push(pool[0]);
@@ -268,7 +274,7 @@ function tryStraightFlush(regulars: Card[], jokers: Card[], k: 3 | 4 | 5): BestH
     const s = c.suit as StandardSuit;
     if (!bySuitRank.has(s)) bySuitRank.set(s, new Map());
     const rankMap = bySuitRank.get(s)!;
-    const v = rankValue(c.rank);
+    const v = rankOrderValue(c.rank);
     if (!rankMap.has(v)) rankMap.set(v, []);
     rankMap.get(v)!.push(c);
   }
@@ -305,7 +311,7 @@ function tryStraightFlush(regulars: Card[], jokers: Card[], k: 3 | 4 | 5): BestH
  * High Card falls back to the single highest card a PLAYER played in the lane.
  * Community cards are intentionally excluded so that players can't "borrow"
  * a strong High Card bonus from cards they didn't actually play.
- * Jokers the player played still count (value 15 intrinsic).
+ * Jokers the player played still count, capped at Ace value (12).
  */
 function tryHighCard(playerCards: Card[]): BestHand | null {
   if (playerCards.length === 0) return null;

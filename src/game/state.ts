@@ -2,15 +2,57 @@
  * Game State Initialization Helpers
  */
 
-import type { Card, CurrentPlayer, GameState, Lane, LaneId, LaneRelicEffects, PlayerState, RelicAvailability } from './types';
+import type { Card, CurrentPlayer, GameState, Lane, LaneId, LaneRelicEffects, PlayerState, RelicAvailability, RelicStacks } from './types';
 import { createDeck, shuffle } from './deck';
 import { SUIT_EFFECTS_ENABLED } from './suitEffects';
 
 const STARTING_HP = 100;
 const LANE_IDS: LaneId[] = ['left', 'middle', 'right'];
 
-export function createActiveRelics(): RelicAvailability {
-  return { shield: true, skull: true, sword: true };
+// v8 Split Deck: how many cards to set aside as the neutral community pile when
+// partitioning. The rest is split evenly into the two personal player decks.
+// Sized comfortably above a round's worst-case community consumption (3 initial
+// per-lane cards + ~1 per lane resolution) so community rarely starves while
+// still leaving large, equal player decks. Tunable.
+const COMMUNITY_RESERVE = 16;
+
+export interface DeckPartition {
+  player1Deck: Card[];
+  player2Deck: Card[];
+  communityDeck: Card[];
+}
+
+/**
+ * v8 Split Deck: deterministically split a pool of cards into two EQUAL personal
+ * decks plus a neutral community pile. The community pile gets COMMUNITY_RESERVE
+ * cards; the remainder is split evenly, and any single odd leftover card is
+ * folded into the community pile so the two player decks are exactly equal in
+ * size. Equal decks + equal draws are what guarantee fair dealing.
+ *
+ * The pool is shuffled here, so callers should pass the raw (unshuffled) pool.
+ */
+export function partitionDeck(pool: Card[]): DeckPartition {
+  const shuffled = shuffle(pool);
+  const reserve = Math.min(COMMUNITY_RESERVE, shuffled.length);
+  const community = shuffled.slice(0, reserve);
+  const rest = shuffled.slice(reserve);
+  const half = Math.floor(rest.length / 2);
+  const player1Deck = rest.slice(0, half);
+  const player2Deck = rest.slice(half, half * 2);
+  const leftover = rest.slice(half * 2); // 0 or 1 card when rest is odd
+  return {
+    player1Deck,
+    player2Deck,
+    communityDeck: [...community, ...leftover],
+  };
+}
+
+export function createInactiveRelics(): RelicAvailability {
+  return { shield: false, skull: false, sword: false };
+}
+
+export function createEmptyRelicStacks(): RelicStacks {
+  return { shield: 0, skull: 0, sword: 0 };
 }
 
 function createEmptyLaneRelicEffect(): LaneRelicEffects {
@@ -44,8 +86,11 @@ function createInitialPlayerState(): PlayerState {
   return {
     hp: STARTING_HP,
     hand: [],
-    relicsAvailable: createActiveRelics(),
-    minionAvailable: true,
+    relicsAvailable: createInactiveRelics(),
+    relicStacks: createEmptyRelicStacks(),
+    minionAvailable: false,
+    minionStacks: 0,
+    lastEndTurnDrawCardIds: [],
     // v2 Ability System
     bloodDebtStacks: 0,
     bleedStacks: [],
@@ -61,16 +106,19 @@ function createInitialPlayerState(): PlayerState {
 }
 
 export function initializeNewGame(): GameState {
-  const sharedDeck = shuffle(createDeck());
+  const { player1Deck, player2Deck, communityDeck } = partitionDeck(createDeck());
   return {
     phase: 'ModeSelection',
     gameMode: 'vs-ai', // Default, will be set by player
     player1: createInitialPlayerState(),
     player2: createInitialPlayerState(),
     lanes: createEmptyLanes(),
-    sharedDeck,
+    player1Deck,
+    player2Deck,
+    communityDeck,
     outOfPlayPile: [],
     currentPlayer: 1,
+    roundStartingPlayer: 1,
     roundNumber: 1,
     player1FinalTurnDone: false,
     player2FinalTurnDone: false,
@@ -108,12 +156,18 @@ export function initializeNewGame(): GameState {
 }
 
 export function startNewRound(prevState: GameState): GameState {
-  // v5 Round Flow: hands + sharedDeck remnants carry over. Only outOfPlayPile folds
-  // back into sharedDeck (shuffled together). Lanes + community slots reset.
-  const newSharedDeck = shuffle([
-    ...clearMinionEffectsFromCards(prevState.sharedDeck),
-    ...clearMinionEffectsFromCards(prevState.outOfPlayPile),
+  // v8 Split Deck Round Flow: hands carry across rounds. Everything else (both
+  // personal decks, the community pile, and the out-of-play discard) is pooled,
+  // reshuffled, and re-partitioned into two fresh EQUAL personal decks plus a
+  // new neutral community pile. Lanes + community slots reset.
+  const pool = clearMinionEffectsFromCards([
+    ...prevState.player1Deck,
+    ...prevState.player2Deck,
+    ...prevState.communityDeck,
+    ...prevState.outOfPlayPile,
   ]);
+  const { player1Deck: newPlayer1Deck, player2Deck: newPlayer2Deck, communityDeck: newCommunityDeck } =
+    partitionDeck(pool);
 
   // Preserve v2 persistent state and hand; reset per-round temp flags are kept as-is
   // (bleed/regen stacks persist - handled elsewhere).
@@ -121,16 +175,22 @@ export function startNewRound(prevState: GameState): GameState {
     ...prevState.player1,
     hp: prevState.player1.hp,
     hand: clearMinionEffectsFromCards(prevState.player1.hand), // preserved across rounds
-    relicsAvailable: createActiveRelics(),
-    minionAvailable: true,
+    relicsAvailable: prevState.player1.relicsAvailable,
+    relicStacks: prevState.player1.relicStacks,
+    minionAvailable: prevState.player1.minionAvailable,
+    minionStacks: prevState.player1.minionStacks,
+    lastEndTurnDrawCardIds: [],
   };
 
   const player2NewRound: PlayerState = {
     ...prevState.player2,
     hp: prevState.player2.hp,
     hand: clearMinionEffectsFromCards(prevState.player2.hand), // preserved across rounds
-    relicsAvailable: createActiveRelics(),
-    minionAvailable: true,
+    relicsAvailable: prevState.player2.relicsAvailable,
+    relicStacks: prevState.player2.relicStacks,
+    minionAvailable: prevState.player2.minionAvailable,
+    minionStacks: prevState.player2.minionStacks,
+    lastEndTurnDrawCardIds: [],
   };
 
   return {
@@ -139,9 +199,12 @@ export function startNewRound(prevState: GameState): GameState {
     player1: player1NewRound,
     player2: player2NewRound,
     lanes: createEmptyLanes(),
-    sharedDeck: newSharedDeck,
+    player1Deck: newPlayer1Deck,
+    player2Deck: newPlayer2Deck,
+    communityDeck: newCommunityDeck,
     outOfPlayPile: [],
     currentPlayer: 1,
+    roundStartingPlayer: prevState.roundStartingPlayer,
     roundNumber: prevState.roundNumber + 1,
     player1FinalTurnDone: false,
     player2FinalTurnDone: false,
@@ -179,20 +242,23 @@ export function startNewRound(prevState: GameState): GameState {
 }
 
 /**
- * v4 Shared deck: draw up to `count` cards from the top of the shared deck
- * into the specified player's hand. Returns a new GameState.
+ * v8 Split deck: draw up to `count` cards from the top of the specified
+ * player's OWN deck into their hand. Because each player draws only from their
+ * own equal-sized deck, both players always draw the same number of cards over
+ * a round. Returns a new GameState.
  */
-export function drawFromSharedDeck(state: GameState, player: CurrentPlayer, count: number): GameState {
-  if (count <= 0 || state.sharedDeck.length === 0) return state;
-  const cardsToDraw = Math.min(count, state.sharedDeck.length);
-  const drawn = state.sharedDeck.slice(0, cardsToDraw);
-  const remaining = state.sharedDeck.slice(cardsToDraw);
+export function drawFromPlayerDeck(state: GameState, player: CurrentPlayer, count: number): GameState {
+  const deck = player === 1 ? state.player1Deck : state.player2Deck;
+  if (count <= 0 || deck.length === 0) return state;
+  const cardsToDraw = Math.min(count, deck.length);
+  const drawn = deck.slice(0, cardsToDraw);
+  const remaining = deck.slice(cardsToDraw);
   const targetHand = player === 1 ? state.player1.hand : state.player2.hand;
   const newHand = [...targetHand, ...drawn];
   if (player === 1) {
-    return { ...state, sharedDeck: remaining, player1: { ...state.player1, hand: newHand } };
+    return { ...state, player1Deck: remaining, player1: { ...state.player1, hand: newHand } };
   }
-  return { ...state, sharedDeck: remaining, player2: { ...state.player2, hand: newHand } };
+  return { ...state, player2Deck: remaining, player2: { ...state.player2, hand: newHand } };
 }
 
 export function applyDamage(player: PlayerState, damage: number): PlayerState {

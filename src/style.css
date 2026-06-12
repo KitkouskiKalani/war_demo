@@ -4,19 +4,31 @@
   padding: 0;
 }
 
+html {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
 body {
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
   background: #1a1a2e;
   color: #e2e8f0;
+  width: 100vw;
+  height: 100vh;
   min-height: 100vh;
   overflow: hidden;
+  position: fixed;
+  inset: 0;
 }
 
 #root {
   width: 100%;
-  min-height: 100vh;
+  height: 100%;
+  min-height: 100%;
   display: flex;
   justify-content: center;
+  overflow: hidden;
 }
 
 /* ========================================
@@ -26,7 +38,9 @@ body {
 .game-container {
   display: flex;
   flex-direction: column;
-  height: 100dvh; /* Dynamic viewport height - accounts for mobile browser UI */
+  height: 100vh;
+  min-height: 100vh;
+  max-height: 100vh;
   width: 100%;
   max-width: 430px;
   overflow: hidden;
@@ -36,10 +50,13 @@ body {
   overscroll-behavior: none;
 }
 
-/* Fallback for browsers without dvh support */
-@supports not (height: 100dvh) {
+/* Prefer Safari's stable small viewport on mobile so browser chrome changes do
+   not shift the board upward or clip the hand area mid-session. */
+@supports (height: 100svh) {
   .game-container {
-    height: calc(100vh - 60px); /* Approximate mobile browser UI height */
+    height: 100svh;
+    min-height: 100svh;
+    max-height: 100svh;
   }
 }
 
@@ -494,6 +511,25 @@ body {
   z-index: 10;
 }
 
+/* Hearthstone-style hand hover: lift the card further out of the hand and
+   wreath it in a faint gold glow. Scoped to hand cards so lane/community
+   cards keep their subtler hover. */
+.hand-card-slot .card:hover:not(.card-disabled) {
+  transform: translateY(-30px) scale(1.14);
+  box-shadow:
+    0 0 14px 3px rgba(255, 215, 0, 0.45),
+    0 0 28px 8px rgba(255, 200, 60, 0.22),
+    0 14px 26px rgba(0, 0, 0, 0.6);
+  z-index: 50;
+}
+
+/* Lift the whole slot above its neighbours on hover so the raised card and its
+   glow are never clipped by overlapping cards. !important is required because
+   each slot carries an inline z-index. */
+.hand-card-slot:hover {
+  z-index: 50 !important;
+}
+
 .card-selected {
   transform: translateY(-12px) scale(1.1) !important;
   box-shadow: 0 0 16px rgba(255, 215, 0, 0.8), 0 8px 16px rgba(0,0,0,0.5) !important;
@@ -771,12 +807,33 @@ body {
   animation: avatar-turn-glow 1.5s ease-in-out infinite;
 }
 
+.avatar-frame.support-ready img {
+  animation: avatar-support-glow 1.4s ease-in-out infinite;
+}
+
+.avatar-frame.clickable {
+  cursor: pointer;
+}
+
+.avatar-frame.clickable:hover img {
+  transform: scale(1.04);
+}
+
 @keyframes avatar-turn-glow {
   0%, 100% {
     filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.9)) drop-shadow(0 0 18px rgba(34, 197, 94, 0.6));
   }
   50% {
     filter: drop-shadow(0 0 14px rgba(34, 197, 94, 1)) drop-shadow(0 0 28px rgba(34, 197, 94, 0.75));
+  }
+}
+
+@keyframes avatar-support-glow {
+  0%, 100% {
+    filter: drop-shadow(0 0 8px rgba(250, 204, 21, 0.9)) drop-shadow(0 0 18px rgba(250, 204, 21, 0.6));
+  }
+  50% {
+    filter: drop-shadow(0 0 14px rgba(250, 204, 21, 1)) drop-shadow(0 0 30px rgba(250, 204, 21, 0.78));
   }
 }
 
@@ -831,9 +888,9 @@ body {
 }
 
 .support-relic-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  position: relative;
+  width: 126px;
+  height: 112px;
 }
 
 .support-relic-row .support-icon {
@@ -841,7 +898,25 @@ body {
 }
 
 .relic-icon {
+  position: absolute;
+  width: 56px;
+  height: 56px;
   opacity: 0.95;
+}
+
+.relic-icon.relic-skull {
+  top: 2px;
+  left: 4px;
+}
+
+.relic-icon.relic-shield {
+  left: 0;
+  bottom: 4px;
+}
+
+.relic-icon.relic-sword {
+  right: 10px;
+  bottom: 20px;
 }
 
 .relic-icon.relic-active {
@@ -852,8 +927,8 @@ body {
 }
 
 .minion-icon {
-  width: 62px;
-  height: 62px;
+  width: 72px;
+  height: 72px;
   margin-left: 0;
   opacity: 0.95;
 }
@@ -990,27 +1065,43 @@ body {
   align-items: center;
   width: 100%;
   max-width: 430px;
-  column-gap: 8px;
+  column-gap: 0;
   padding: 4px 6px;
 }
 
 .hero-slot-left,
 .hero-slot-right {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  position: relative;
+  width: 126px;
+  height: 112px;
 }
 
 .hero-slot-left {
   justify-self: end;
+  margin-right: -10px;
 }
 
 .hero-slot-center {
   justify-self: center;
+  z-index: 2;
 }
 
 .hero-slot-right {
   justify-self: start;
+  margin-left: -10px;
+}
+
+.hero-slot-left .minion-icon {
+  position: absolute;
+  left: 10px;
+  top: 4px;
+}
+
+.hero-slot-left .hp-display-box {
+  position: absolute;
+  right: 2px;
+  bottom: 10px;
+  z-index: 3;
 }
 
 .hero-meta-row {
@@ -1036,14 +1127,14 @@ body {
 }
 
 .hero-float.player .support-icon {
-  width: 50px;
-  height: 50px;
+  width: 56px;
+  height: 56px;
   margin-left: 0;
 }
 
 .hero-float.player .support-icon.minion-icon {
-  width: 62px;
-  height: 62px;
+  width: 72px;
+  height: 72px;
 }
 
 /* Support ability available state - glowing effect */
@@ -1078,8 +1169,8 @@ body {
 .hp-display-box {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px 10px;
+  gap: 3px;
+  padding: 4px 8px;
   background: rgba(0, 0, 0, 0.7);
   border-radius: 8px;
   border: 2px solid;
@@ -1095,11 +1186,11 @@ body {
 
 .hp-heart {
   color: #ef4444;
-  font-size: 16px;
+  font-size: 14px;
 }
 
 .hp-value {
-  font-size: 20px;
+  font-size: 17px;
   font-weight: bold;
   color: white;
 }
@@ -1113,8 +1204,8 @@ body {
    ======================================== */
 
 .lane {
-  background: linear-gradient(180deg, rgba(60, 70, 80, 0.9) 0%, rgba(80, 90, 100, 0.95) 100%);
-  border: 2px solid #5a6a7a;
+  background: linear-gradient(180deg, rgba(30, 38, 48, 0.28) 0%, rgba(40, 50, 62, 0.34) 100%);
+  border: 1px solid rgba(130, 150, 170, 0.30);
   border-radius: 8px;
   padding: 3px;
   display: flex;
@@ -1134,6 +1225,51 @@ body {
     padding: 5px;
     width: 112px;
     height: 320px;
+  }
+}
+
+/* 4th column: shared deck rendered as a slim lane. Holds a single card width
+   (the draw pile / community card) rather than 3 overlapping cards, so it is
+   kept narrow to fit beside the three play lanes inside the 430px container,
+   while still sharing their height, slot spacing and score-badge styling. */
+.deck-lane {
+  width: 60px;
+}
+
+.deck-lane .draw-pile .card-small,
+.deck-lane .community-poker-slot .card,
+.deck-lane .community-poker-slot .card.card-small {
+  width: 54px;
+  height: 75px;
+}
+
+.deck-lane .community-poker-slot.lane-community-slot {
+  width: 54px;
+  height: 75px;
+}
+
+.deck-lane .draw-pile-empty-outline {
+  width: 54px;
+  height: 75px;
+}
+
+/* Deck score badges mirror the lane totals but read as a neutral deck count. */
+.deck-total.has-value {
+  color: #cbd5e1;
+}
+
+@media (min-width: 640px) {
+  .deck-lane {
+    width: 72px;
+  }
+
+  .deck-lane .draw-pile .card-small,
+  .deck-lane .community-poker-slot .card,
+  .deck-lane .community-poker-slot .card.card-small,
+  .deck-lane .community-poker-slot.lane-community-slot,
+  .deck-lane .draw-pile-empty-outline {
+    width: 60px;
+    height: 84px;
   }
 }
 
@@ -1394,15 +1530,15 @@ body {
 }
 
 .community-poker-slot.lane-community-slot {
-  width: 52px;
-  height: 72px;
+  width: 54px;
+  height: 75px;
   margin: 4px 0;
   align-self: center;
 }
 
 .community-poker-slot.all-lane-community-slot {
-  width: 52px;
-  height: 72px;
+  width: 54px;
+  height: 75px;
   align-self: center;
 }
 
@@ -1436,7 +1572,7 @@ body {
 
 .community-poker-slot .card:hover:not(.card-disabled) {
   transform: none;
-  box-shadow: none;
+  box-shadow: 0 0 10px 2px rgba(255, 215, 0, 0.4);
 }
 
 /* Empty community slots lock when the deck cannot refill that lane. */
@@ -1448,8 +1584,8 @@ body {
   }
 
   .community-poker-slot.all-lane-community-slot {
-    width: 58px;
-    height: 82px;
+    width: 60px;
+    height: 84px;
   }
 }
 
@@ -1473,6 +1609,22 @@ body {
 
 .stacked-card {
   position: relative;
+}
+
+/* Lane cards reveal on hover, just like hand cards: pop the hovered card above
+   its overlapping neighbours so the full card is shown and its tooltip can be
+   triggered, with a slight lift and faint gold glow. !important is required on
+   the slot because each carries an inline z-index. */
+.lane-cards-stack .stacked-card:hover {
+  z-index: 100 !important;
+}
+
+.lane-cards-stack .stacked-card .card.card-face:hover:not(.card-disabled) {
+  transform: translateY(-8px) scale(1.14);
+  box-shadow:
+    0 0 12px 3px rgba(255, 215, 0, 0.42),
+    0 0 24px 6px rgba(255, 200, 60, 0.2),
+    0 10px 20px rgba(0, 0, 0, 0.6);
 }
 
 /* Overlap: shift each subsequent card left by 60% of the card's width. */
@@ -1642,6 +1794,26 @@ body {
   margin-top: 4px;
 }
 
+/* Turn controls relocated out of the board into the phase row, keeping the
+   board itself as clean as the mock (no inline END TURN button). */
+.turn-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  z-index: 90;
+  pointer-events: auto;
+}
+
+.turn-controls .end-turn-btn {
+  line-height: 1;
+  pointer-events: auto;
+}
+
+.turn-controls .cards-played {
+  white-space: nowrap;
+}
+
 .phase-banner {
   padding: 4px 12px;
   border-radius: 16px;
@@ -1759,6 +1931,9 @@ body {
   display: flex;
   gap: 2px;
   justify-content: center;
+  align-items: center;
+  /* Fixed height so the board doesn't move up when the opponent has no cards. */
+  min-height: 85px;
 }
 
 .middle-section {
@@ -1965,17 +2140,23 @@ body {
 .hand-container {
   display: flex;
   justify-content: center;
+  align-items: center;
   gap: 2px;
   flex-wrap: nowrap;
   padding: 2px;
   padding-top: 8px;
+  margin-bottom: 26px; /* Lift hand up off the bottom edge so cards are more visible */
   overflow: visible;
+  /* Reserve the card row's height so the board never shifts when the hand is
+     empty ("No cards"). */
+  min-height: 99px;
 }
 
 @media (min-width: 640px) {
   .hand-container {
     gap: 5px;
     padding: 10px;
+    min-height: 120px;
   }
 }
 
@@ -2009,8 +2190,9 @@ body {
   .ai-hand {
     gap: 0;
     overflow: visible;
-    margin-top: -30px;
+    margin-top: -40px;
     margin-bottom: -2px;
+    min-height: 70px; /* match card height so empty hand keeps the layout fixed */
   }
 
   .ai-hand .card.card-small {
@@ -2024,9 +2206,9 @@ body {
   }
 
   .hero-float.opponent {
-    margin-top: -30px;
+    margin-top: -30px; /* +10px: give the enemy avatar region more room, move it down a bit */
     margin-bottom: 0px;
-    column-gap: 6px;
+    column-gap: 0;
   }
 
   .hero-float.opponent .avatar-frame {
@@ -2039,16 +2221,77 @@ body {
     object-position: center;
   }
 
+  /* Enemy ability buttons are scaled down by the same ratio the enemy avatar
+     is relative to the bottom player (80/96 ≈ 0.83), so they read as a smaller
+     mirror of the player's abilities. */
   .hero-float.opponent .support-icon {
-    width: 38px;
-    height: 38px;
+    width: 43px;
+    height: 43px;
+  }
+
+  .hero-slot-left,
+  .hero-slot-right,
+  .support-relic-row {
+    width: 108px;
+    height: 98px;
+  }
+
+  .hero-slot-left {
+    margin-right: -8px;
+  }
+
+  .hero-slot-right {
+    margin-left: -8px;
+  }
+
+  .hero-slot-left .minion-icon {
+    left: 24px;
+    top: -10px;
+  }
+
+  .hero-slot-left .hp-display-box {
+    right: 0;
+    bottom: -7px;
+  }
+
+  .relic-icon.relic-skull {
+    top: -10px;
+    left: 10px;
+  }
+
+  .relic-icon.relic-shield {
+    left: -5px;
+    bottom: -15px;
+  }
+
+  .relic-icon.relic-sword {
+    right: 30px;
+    bottom: 20px;
+  }
+
+  /* The relic positions above are tuned for the opponent's scaled-down relic
+     row. The bottom player's relic row isn't scaled, so override it back to its
+     own (un-scaled) placement. Higher specificity wins over the global rules. */
+  .hero-float.player .relic-icon.relic-skull {
+    top: -10px;
+    left: 10px;
+  }
+
+  .hero-float.player .relic-icon.relic-shield {
+    left: -5px;
+    bottom: -20px;
+  }
+
+  .hero-float.player .relic-icon.relic-sword {
+    right: 10px;
+    bottom: 10px;
   }
 
   /* ---- MIDDLE / BOARD ---- */
   .middle-section {
     gap: 2px;
     padding: 0 2px;
-    margin-top: -12px;
+    margin-top: -16px; /* +10px: more breathing room between the avatar region and the board */
   }
 
   .board-area {
@@ -2062,12 +2305,38 @@ body {
     padding: 3px;
   }
 
+  /* Keep the rightmost deck/community column slim on mobile. The generic
+     mobile .lane width above is intentionally wide for playable lanes, but the
+     deck lane only needs one card column; leaving it at 118px pushes the left
+     lane off-screen. */
+  .deck-lane {
+    width: 72px;
+    padding: 3px 2px;
+  }
+
+  .deck-lane .draw-pile .card-small,
+  .deck-lane .draw-pile-empty-outline {
+    width: 66px;
+    height: 92px;
+  }
+
+  .community-poker-slot.lane-community-slot,
+  .community-poker-slot.all-lane-community-slot,
+  .deck-lane .community-poker-slot.lane-community-slot,
+  .deck-lane .community-poker-slot .card,
+  .deck-lane .community-poker-slot .card.card-small {
+    width: 66px;
+    height: 92px;
+  }
+
   .lanes-container {
-    gap: 4px;
+    gap: 2px;
   }
 
   .board-row {
-    gap: 3px;
+    gap: 0;
+    position: relative;
+    top: 10px;
   }
 
   .card-small {
@@ -2090,6 +2359,8 @@ body {
   }
 
   .end-turn-btn {
+    width: 80px;
+    height: 30px;
     padding: 6px 8px;
     font-size: 9px;
     min-width: 44px;
@@ -2103,14 +2374,15 @@ body {
   .bottom-section {
     padding: 0 4px max(4px, env(safe-area-inset-bottom, 4px));
     gap: 0;
+    margin-top: -22px; /* Pull the whole player area up so the hand isn't clipped */
   }
 
   .hero-float.player {
-    margin-top: -10px;
+    margin-top: -9px; /* +15px: push the player avatar away from the playing board */
     margin-bottom: -2px;
     transform: scale(1);
     transform-origin: center top;
-    column-gap: 6px;
+    column-gap: 0;
   }
 
   /* 20% smaller than prior enlarged avatar */
@@ -2125,15 +2397,47 @@ body {
   }
 
   .hero-float.player .support-icon {
-    width: 42px;
-    height: 42px;
+    width: 52px;
+    height: 52px;
     margin-left: 0;
   }
 
   .hero-float.opponent .support-icon.minion-icon,
   .hero-float.player .support-icon.minion-icon {
-    width: 58px;
-    height: 58px;
+    width: 76px;
+    height: 76px;
+  }
+
+  .hero-float.opponent .support-icon.minion-icon {
+    width: 63px;
+    height: 63px;
+  }
+
+  /* Scale the right-side relic trio down by the avatar ratio AND cluster it
+     tighter: scaling from the center pulls the three relics closer together
+     while preserving the exact same proportional arrangement the player has. */
+  .hero-float.opponent .support-relic-row {
+    transform: scale(0.83);
+    transform-origin: center center;
+  }
+
+  .hero-float.opponent .hero-slot-left .minion-icon {
+    left: 34px;
+    top: 5px;
+  }
+
+  .hp-display-box {
+    padding: 3px 7px;
+    gap: 2px;
+    border-radius: 6px;
+  }
+
+  .hp-heart {
+    font-size: 13px;
+  }
+
+  .hp-value {
+    font-size: 16px;
   }
 
   .hero-meta-row {
@@ -2165,8 +2469,10 @@ body {
   .hand-container {
     padding: 4px 2px 8px;
     gap: 4px;
-    margin-top: 10px; /* Move player hand down without changing hero position */
+    margin-top: -4px;
+    margin-bottom: 26px; /* Lift hand up off the bottom edge so cards are more visible */
     overflow: visible;
+    min-height: 109px; /* card (97px) + vertical padding, fixed so empty hand keeps height */
   }
 
   .hand-container .card {
@@ -2192,6 +2498,12 @@ body {
   .phase-row {
     margin-top: 0;
     padding-right: 28px;
+    position: relative;
+    z-index: 90;
+  }
+
+  .turn-controls {
+    transform: translateX(-280px) translateY(90px);
   }
 
   .hint-text {
@@ -2642,13 +2954,13 @@ body {
   justify-content: center;
   background: rgba(0, 0, 0, 0.85);
   z-index: 200;
-  animation: resolution-appear 2.5s ease-out forwards;
+  animation: resolution-appear 5s ease-out forwards;
 }
 
 @keyframes resolution-appear {
   0% { opacity: 0; }
   10% { opacity: 1; }
-  85% { opacity: 1; }
+  92% { opacity: 1; }
   100% { opacity: 0; }
 }
 
@@ -2679,13 +2991,15 @@ body {
   letter-spacing: 2px;
 }
 
-.resolution-totals {
+.resolution-totals,
+.resolution-hands {
   display: flex;
   align-items: center;
   gap: 24px;
 }
 
-.resolution-total {
+.resolution-total,
+.resolution-hand {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2697,15 +3011,53 @@ body {
   transition: all 0.3s ease;
 }
 
-.resolution-total.winner {
-  border-color: #4ade80;
-  box-shadow: 0 0 20px rgba(74, 222, 128, 0.5);
-  animation: winner-pulse 0.5s ease-out 0.5s;
+.resolution-hand {
+  min-width: 190px;
 }
 
-.resolution-total.loser {
+.resolution-card-row {
+  display: flex;
+  justify-content: center;
+  gap: 0;
+  min-height: 92px;
+}
+
+.resolution-card-row .card:not(:first-child) {
+  margin-left: -38px;
+}
+
+.resolution-hand-name {
+  max-width: 160px;
+  min-height: 28px;
+  color: #fbbf24;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.15;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.resolution-breakdown {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.resolution-total.winner,
+.resolution-hand.winner {
+  border-color: #4ade80;
+  box-shadow: 0 0 24px rgba(74, 222, 128, 0.65), inset 0 0 18px rgba(74, 222, 128, 0.12);
+  animation: winner-pulse 0.8s ease-out 1.4s;
+}
+
+.resolution-total.loser,
+.resolution-hand.loser {
   border-color: #f87171;
-  opacity: 0.7;
+  box-shadow: 0 0 24px rgba(248, 113, 113, 0.55), inset 0 0 18px rgba(248, 113, 113, 0.12);
 }
 
 @keyframes winner-pulse {
@@ -2721,11 +3073,13 @@ body {
   letter-spacing: 1px;
 }
 
-.resolution-total.opponent .resolution-label {
+.resolution-total.opponent .resolution-label,
+.resolution-hand.opponent .resolution-label {
   color: #f87171;
 }
 
-.resolution-total.player .resolution-label {
+.resolution-total.player .resolution-label,
+.resolution-hand.player .resolution-label {
   color: #4ade80;
 }
 
@@ -2736,12 +3090,14 @@ body {
   text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
 }
 
-.resolution-total.winner .resolution-value {
+.resolution-total.winner .resolution-value,
+.resolution-hand.winner .resolution-value {
   color: #4ade80;
   text-shadow: 0 0 15px rgba(74, 222, 128, 0.6);
 }
 
-.resolution-total.loser .resolution-value {
+.resolution-total.loser .resolution-value,
+.resolution-hand.loser .resolution-value {
   color: #f87171;
 }
 
@@ -2772,7 +3128,7 @@ body {
   font-weight: 700;
   padding: 10px 24px;
   border-radius: 8px;
-  animation: damage-appear 0.4s ease-out 0.8s both;
+  animation: damage-appear 0.4s ease-out 3.2s both;
 }
 
 @keyframes damage-appear {
@@ -3235,4 +3591,53 @@ body {
   letter-spacing: 2px;
   pointer-events: none;
   z-index: 10;
+}
+
+/* ===== Visual FX: play sparks + ability pulses ===== */
+.fx-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 9998;
+}
+
+.fx-spark {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #ffffff 0%, #fff1bf 30%, #f7c948 65%, rgba(247, 201, 72, 0) 100%);
+  box-shadow:
+    0 0 10px 4px rgba(255, 221, 120, 0.95),
+    0 0 22px 10px rgba(247, 201, 72, 0.55);
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+@keyframes fxPulse {
+  0% {
+    transform: scale(1);
+    filter: brightness(1) drop-shadow(0 0 0 rgba(255, 221, 120, 0));
+  }
+  30% {
+    transform: scale(1.22);
+    filter: brightness(1.65) drop-shadow(0 0 12px rgba(255, 221, 120, 0.95));
+  }
+  60% {
+    transform: scale(1.05);
+    filter: brightness(1.2) drop-shadow(0 0 6px rgba(255, 221, 120, 0.7));
+  }
+  100% {
+    transform: scale(1);
+    filter: brightness(1) drop-shadow(0 0 0 rgba(255, 221, 120, 0));
+  }
+}
+
+.fx-pulse {
+  animation: fxPulse 0.65s ease-out;
+  z-index: 5;
 }

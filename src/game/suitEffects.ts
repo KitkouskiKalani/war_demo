@@ -403,7 +403,7 @@ export function getCardTooltipData(
 ): CardTooltipData {
   // Jokers get special tooltip - no suit effects
   if (card.rank === 'JOKER') {
-    return getJokerInHandTooltip()
+    return getJokerInHandTooltip(card, ownerSuit)
   }
 
   const rankName = getRankDisplayName(card.rank)
@@ -413,21 +413,38 @@ export function getCardTooltipData(
   const header = `${rankName} of ${suitName}`
   const baseDamage = `Deals ${value} damage`
 
+  const stackEffect = getAbilityStackTooltip(card, ownerSuit)
+
   // Master feature flag: suit abilities disabled -> omit the effect line so
   // the tooltip cannot advertise an effect that will not fire.
   if (!SUIT_EFFECTS_ENABLED) {
-    return { header, baseDamage, effect: null }
+    return { header, baseDamage, effect: stackEffect }
   }
 
   const def = getEffectDefinition(card, ownerSuit)
   if (!def) {
-    return { header, baseDamage, effect: null }
+    return { header, baseDamage, effect: stackEffect }
   }
 
   // Build effect description based on suit and tier
   const effect = getEffectDescriptionForTooltip(card, def, ownerSuit!)
 
-  return { header, baseDamage, effect }
+  return { header, baseDamage, effect: stackEffect ? `${stackEffect}\n${effect}` : effect }
+}
+
+function getAbilityStackTooltip(card: Card, ownerSuit: StandardSuit | null): string | null {
+  if (!ownerSuit) return null
+  if (card.suit === ownerSuit) return 'Gives a stack of Minion ability'
+  if (typeof card.rank === 'number') {
+    if (card.rank >= 2 && card.rank <= 6) return 'Gives a stack of Sword'
+    if (card.rank >= 7 && card.rank <= 10) return 'Gives a stack of Shield'
+    return null
+  }
+  if (card.rank === 'J') return 'Gives a stack of Shield'
+  if (card.rank === 'Q' || card.rank === 'K' || card.rank === 'A' || card.rank === 'JOKER') {
+    return 'Gives a stack of Relic'
+  }
+  return null
 }
 
 function getEffectDescriptionForTooltip(
@@ -534,12 +551,13 @@ function getDiamondsTooltip(rank: Rank, tier: RankTier, def: EffectDefinition): 
 /**
  * Joker tooltip - Jokers have NO suit effects
  */
-export function getJokerInHandTooltip(): CardTooltipData {
+export function getJokerInHandTooltip(card?: Card, ownerSuit?: StandardSuit | null): CardTooltipData {
+  const stackEffect = card ? getAbilityStackTooltip(card, ownerSuit ?? null) : null
   return {
     header: 'Joker',
-    baseDamage: 'Deals up to 15 damage',
-    effect: null, // Jokers never have suit effects
-    description: 'Wild card: becomes optimal rank/suit for poker bonuses. No suit ability.'
+    baseDamage: 'Deals up to 12 damage',
+    effect: stackEffect, // Jokers never have suit effects
+    description: 'Wild card: becomes optimal rank/suit for poker bonuses, capped at Ace value. No suit ability.'
   }
 }
 
@@ -549,6 +567,29 @@ export function getJokerOnBoardTooltip(): CardTooltipData {
     baseDamage: 'Variable damage',
     effect: null,
     description: 'Will resolve as optimal card. No suit ability triggers.'
+  }
+}
+
+/**
+ * Tooltip for a shared community poker card. Community cards have no owner and
+ * trigger no suit abilities - they only contribute to both players' poker hands.
+ */
+export function getCommunityCardTooltip(card: Card): CardTooltipData {
+  if (card.rank === 'JOKER') {
+    return {
+      header: 'Joker',
+      baseDamage: 'Wild card',
+      effect: null,
+      description: 'Community card shared by both players. Becomes the optimal rank/suit for poker bonuses. No suit ability.',
+    }
+  }
+  const rankName = getRankDisplayName(card.rank)
+  const suitName = getSuitDisplayName(card.suit)
+  return {
+    header: `${rankName} of ${suitName}`,
+    baseDamage: `Worth ${cardValue(card)}`,
+    effect: null,
+    description: 'Community card: counts toward both players’ poker hands in this lane. No suit ability.',
   }
 }
 

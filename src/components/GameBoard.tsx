@@ -7,14 +7,16 @@
  * - Bottom: Player avatar/HP + Player hand
  */
 
-import { useReducer, useEffect, useState, useCallback, useRef, useLayoutEffect } from 'react'
+import { useReducer, useEffect, useState, useCallback, useRef, useLayoutEffect, Fragment } from 'react'
 import { createPortal } from 'react-dom'
-import { gameReducer, canPlayCardToLane, canEndTurn, executeAITurn, getAIEffectChoice } from '../game'
+import { gameReducer, canPlayCardToLane, canEndTurn, executeAITurn, getAIEffectChoice, shuffle, STANDARD_RANKS, STANDARD_SUITS } from '../game'
 import { initializeNewGame } from '../game/state'
-import { getLaneDisplay } from '../game/poker'
-import type { Card, CurrentPlayer, LaneId, Lane, RelicType, StandardSuit, GameMode } from '../game/types'
+import { getLaneDisplay, HAND_LABELS } from '../game/poker'
+import type { Card, CurrentPlayer, LaneId, Lane, RelicType, StandardSuit, GameMode, Rank } from '../game/types'
 import { CardView } from './CardView'
 import { EffectChoiceModal, StatusIndicators, ChargesDisplay } from './EffectChoiceModal'
+import { playSfx, stopSfx, unlockSfx } from '../audio/sfx'
+import { flySpark, pulse } from '../fx/effects'
 import * as Network from '../network/peer'
 import * as Lobbies from '../network/supabase'
 import type { Lobby } from '../network/supabase'
@@ -51,7 +53,7 @@ type BoardSelectionMode =
   | 'relic-skull-card'
   | 'relic-skull-target'
 
-type MinionMenuMode = 'clubs-card' | 'clubs-suit' | 'diamonds-card'
+type MinionMenuMode = 'clubs-card' | 'clubs-suit' | 'diamonds-card' | 'spades-skull-card' | 'hearts-minion-choice' | 'hearts-skull-card'
 
 const SUIT_OPTIONS: { suit: StandardSuit; emoji: string; label: string }[] = [
   { suit: 'hearts', emoji: '♥️', label: 'Hearts' },
@@ -64,19 +66,71 @@ function relicAssetName(relic: RelicType): string {
   return relic[0].toUpperCase() + relic.slice(1)
 }
 
-// Get relic path for a suit (inactive suit variants; active variants reserved for future functionality)
-function getRelicPath(suit: StandardSuit | null, relic: RelicType, isActive = false): string {
-  const relicName = relicAssetName(relic)
-  if (isActive) {
-    return `/assets/cards/Avatars and Supports/Relics/Active_Relic_${relicName}.png`
-  }
-  const suitFolder = suit ? SUIT_FOLDER_MAP[suit] : 'Hearts'
-  return `/assets/cards/Avatars and Supports/Relics/${suitFolder}_Relic_${relicName}.png`
+function getAbilitySuitName(suit: StandardSuit | null, useClovers = false): string {
+  if (!suit) return 'Hearts'
+  if (suit === 'clubs') return useClovers ? 'Clovers' : 'Clover'
+  return SUIT_FOLDER_MAP[suit]
 }
 
-function getMinionPath(suit: StandardSuit | null, isActive = false): string {
-  const suitName = suit ? SUIT_FOLDER_MAP[suit] : 'Hearts'
-  return `/assets/cards/Avatars and Supports/Minions/Minion_${suitName}_${isActive ? 'Active' : 'Inactive'}.png`
+function getStackArtLabel(stackCount: number, diamondMinion = false): string {
+  if (stackCount <= 0) return 'No Bars'
+  if (stackCount === 1) return 'One Bar'
+  return diamondMinion ? 'Two Bar' : 'Two Bars'
+}
+
+function getMinionPath(suit: StandardSuit | null, stackCount = 0): string {
+  const suitName = getAbilitySuitName(suit)
+  if (stackCount >= 3) {
+    return `/assets/abilities/Minions/Minion - ${suitName} - Activated.png`
+  }
+  const artLabel = getStackArtLabel(stackCount, suit === 'diamonds')
+  return `/assets/abilities/Minions/Minion - ${suitName} - ${artLabel}.png`
+}
+
+function getRelicPath(suit: StandardSuit | null, relic: RelicType, stackCount = 0): string {
+  const prefix = relic === 'skull' ? 'Relic' : relicAssetName(relic)
+  const folder = relic === 'skull' ? 'Relics' : relic === 'shield' ? 'Shields' : 'Swords'
+  if (stackCount >= 3) {
+    return `/assets/abilities/${folder}/${prefix} - Activated - ALL BARS.png`
+  }
+  const suitName = getAbilitySuitName(suit, relic === 'sword')
+  return `/assets/abilities/${folder}/${prefix} - ${suitName} - ${getStackArtLabel(stackCount)}.png`
+}
+
+function getRelicTooltip(relic: RelicType, isActive: boolean, stackCount: number, suit: StandardSuit | null): string {
+  const status = isActive ? 'active' : 'inactive'
+  const progressText = ` Progress: ${Math.min(stackCount, 3)}/3 stacks.`
+  if (relic === 'shield') {
+    return `Shield (${status}): Select a lane to shield for 50% damage reduction on that lane's next resolve.${progressText}`
+  }
+  if (relic === 'skull') {
+    if (suit === 'hearts') {
+      return `Relic (${status}): Choose a card in your hand and transform it into a random card from the discard pile.${progressText}`
+    }
+    if (suit === 'spades') {
+      return `Relic (${status}): Choose a card in your hand and transform it into a random suit and rank.${progressText}`
+    }
+    return `Relic (${status}): Move one of your played cards to another non-full lane.${progressText}`
+  }
+  return `Sword (${status}): Select a lane to double your poker bonus on that lane's next resolve.${progressText}`
+}
+
+// Mirror of the reducer's stack-granting rules, used only to decide which
+// ability icon a "spark" should fly to when a card is played. Returns null when
+// a card grants no stack.
+type StackAbilityFx = 'minion' | 'sword' | 'shield' | 'skull'
+function stackAbilityForPlayedCard(card: Card, ownerSuit: StandardSuit | null): StackAbilityFx | null {
+  if (ownerSuit && card.suit === ownerSuit) return 'minion'
+  if (!ownerSuit) return null
+  const rank = card.rank
+  if (typeof rank === 'number') {
+    if (rank >= 2 && rank <= 6) return 'sword'
+    if (rank >= 7 && rank <= 10) return 'shield'
+    return null
+  }
+  if (rank === 'J') return 'shield'
+  if (rank === 'Q' || rank === 'K' || rank === 'A' || rank === 'JOKER') return 'skull'
+  return null
 }
 
 // Get background image based on field control suit
@@ -94,6 +148,14 @@ export function GameBoard() {
   const [isAIThinking, setIsAIThinking] = useState(false)
   const aiExecutingRef = useRef(false)
   const [flipAnimationStage, setFlipAnimationStage] = useState<'cards' | 'result' | 'damage'>('cards')
+  const [laneResolveEndTurnCooldown, setLaneResolveEndTurnCooldown] = useState(false)
+  const laneResolveCooldownTimeoutRef = useRef<number | null>(null)
+  // Brief lockout on End Turn right after an ability resolves. Pressing End Turn
+  // in the same instant an ability fires lets the two clients diverge (an extra
+  // action in flight), which trips the network turn-handoff guard and locks both
+  // players out. The cooldown lets the ability action settle/propagate first.
+  const [abilityEndTurnCooldown, setAbilityEndTurnCooldown] = useState(false)
+  const abilityCooldownTimeoutRef = useRef<number | null>(null)
   
   // HP animation state - track previous HP to show damage/heal animation
   const [player1DisplayHP, setPlayer1DisplayHP] = useState(state.player1.hp)
@@ -102,6 +164,7 @@ export function GameBoard() {
   const [player2TakingDamage, setPlayer2TakingDamage] = useState(false)
   const [player1Healing, setPlayer1Healing] = useState(false)
   const [player2Healing, setPlayer2Healing] = useState(false)
+  const hpAnimationFrameRefs = useRef<{ player1: number | null; player2: number | null }>({ player1: null, player2: null })
   // Pending HP targets - used to delay animation until after resolution overlay closes
   // pendingHP state removed - HP animations now trigger during resolution overlay
   
@@ -115,6 +178,14 @@ export function GameBoard() {
     baseDamage: number
     bonusDamage: number
     bonusHealing: number
+    p1Cards: Card[]
+    p2Cards: Card[]
+    p1HandLabel: string
+    p2HandLabel: string
+    p1BaseDamage: number
+    p2BaseDamage: number
+    p1PokerBonus: number
+    p2PokerBonus: number
   } | null>(null)
   
   // Drag and drop state
@@ -124,6 +195,35 @@ export function GameBoard() {
   const draggingCardRef = useRef<{ card: any; ownerSuit: StandardSuit | null } | null>(null)
   const dragGhostRef = useRef<HTMLDivElement | null>(null)
   const dragRAFRef = useRef<number | null>(null)  // For throttling touch move updates
+  const previousBoardCardCountRef = useRef<number | null>(null)
+  // Snapshot of which cards are on the board, keyed by id, so we can detect the
+  // exact card/owner/lane that was just played and fly a spark to its ability.
+  const previousBoardCardsRef = useRef<Map<string, { laneId: LaneId; owner: CurrentPlayer }> | null>(null)
+
+  // --- Host-authoritative reconciliation bookkeeping ----------------------
+  // The host is the single source of truth. After any gameplay change it
+  // broadcasts its full state; the guest reconciles to it. These refs let the
+  // guest avoid the "revert bounce" where a host snapshot that predates the
+  // guest's own in-flight action would briefly undo it.
+  //
+  // - lastReceivedRemoteSeqRef: (host) highest sequence number seen from the
+  //   guest. Echoed back inside each authoritative snapshot as `ackSeq` so the
+  //   guest knows whether the host has already applied its latest action.
+  // - pendingLocalSeqRef: (guest) sequence of the last action we sent. We only
+  //   adopt an authoritative snapshot once the host has acknowledged at least
+  //   this sequence (ackSeq >= pendingLocalSeqRef), so our optimistic move is
+  //   never reverted by a stale snapshot.
+  // - authoritativeBroadcastTimerRef: (host) debounce handle for the broadcast.
+  const lastReceivedRemoteSeqRef = useRef<number>(0)
+  const pendingLocalSeqRef = useRef<number>(0)
+  const authoritativeBroadcastTimerRef = useRef<number | null>(null)
+  // (host) Signature of the last state we broadcast + the ack we sent with it,
+  // so we can skip re-broadcasting when nothing meaningful changed.
+  const lastBroadcastSignatureRef = useRef<string | null>(null)
+  const lastBroadcastAckRef = useRef<number>(-1)
+  // (guest) Safety net so we never stay stuck holding a snapshot if the host's
+  // state stops changing (e.g. it rejected our action and never re-broadcasts).
+  const holdRecoveryTimerRef = useRef<number | null>(null)
   
   // Board selection mode for Clubs effects
   // 'move-source': Selecting which lane to pick the top card from
@@ -149,6 +249,26 @@ export function GameBoard() {
     stateRef.current = state
   }, [state])
 
+  useEffect(() => {
+    const handleUnlock = () => unlockSfx()
+    window.addEventListener('pointerdown', handleUnlock, { passive: true })
+    window.addEventListener('pointerup', handleUnlock, { passive: true })
+    window.addEventListener('touchstart', handleUnlock, { passive: true })
+    window.addEventListener('touchend', handleUnlock, { passive: true })
+    window.addEventListener('click', handleUnlock)
+    window.addEventListener('keydown', handleUnlock)
+    document.addEventListener('visibilitychange', handleUnlock)
+    return () => {
+      window.removeEventListener('pointerdown', handleUnlock)
+      window.removeEventListener('pointerup', handleUnlock)
+      window.removeEventListener('touchstart', handleUnlock)
+      window.removeEventListener('touchend', handleUnlock)
+      window.removeEventListener('click', handleUnlock)
+      window.removeEventListener('keydown', handleUnlock)
+      document.removeEventListener('visibilitychange', handleUnlock)
+    }
+  }, [])
+
   // Determine if it's "your" turn based on game mode
   const isPlayerTurn = state.currentPlayer === 1
   const isLocalPlayerTurn = state.gameMode === 'online' 
@@ -167,6 +287,79 @@ export function GameBoard() {
   // This prevents stale AI flags from blocking input after turn changes.
   const aiLockActive = state.gameMode === 'vs-ai' && isAIThinking
   const canAct = state.phase === 'Main' && !aiLockActive && state.cardsPlayedThisTurn < 3 && isLocalPlayerTurn
+
+  useEffect(() => {
+    const boardCardCount = state.lanes.reduce(
+      (total, lane) => total + lane.player1.cards.length + lane.player2.cards.length,
+      0,
+    )
+
+    if (previousBoardCardCountRef.current === null) {
+      previousBoardCardCountRef.current = boardCardCount
+      return
+    }
+
+    if (state.phase === 'Main' && boardCardCount > previousBoardCardCountRef.current) {
+      playSfx('playCard')
+    }
+
+    previousBoardCardCountRef.current = boardCardCount
+  }, [state.lanes, state.phase])
+
+  // Fly a spark from a freshly-played card to the ability icon it charged.
+  useEffect(() => {
+    const currentCards = new Map<string, { laneId: LaneId; owner: CurrentPlayer }>()
+    for (const lane of state.lanes) {
+      for (const card of lane.player1.cards) currentCards.set(card.id, { laneId: lane.id, owner: 1 })
+      for (const card of lane.player2.cards) currentCards.set(card.id, { laneId: lane.id, owner: 2 })
+    }
+
+    const previous = previousBoardCardsRef.current
+    previousBoardCardsRef.current = currentCards
+
+    if (previous === null || state.phase !== 'Main') return
+
+    const newlyPlayed: { cardId: string; laneId: LaneId; owner: CurrentPlayer }[] = []
+    currentCards.forEach((info, cardId) => {
+      if (!previous.has(cardId)) newlyPlayed.push({ cardId, laneId: info.laneId, owner: info.owner })
+    })
+    if (newlyPlayed.length === 0) return
+
+    // On mobile the gesture that plays a card can bleed into a tap on the
+    // freshly-placed card, which would select/enlarge it. Make newly played
+    // cards non-interactive for a brief window so that stray tap is ignored.
+    for (const { cardId, laneId } of newlyPlayed) {
+      const el = document.querySelector(
+        `[data-lane-id="${laneId}"] [data-card-id="${cardId}"]`,
+      ) as HTMLElement | null
+      if (!el) continue
+      el.style.pointerEvents = 'none'
+      window.setTimeout(() => {
+        el.style.pointerEvents = ''
+      }, 550)
+    }
+
+    const isOnlineGuest = state.gameMode === 'online' && state.localPlayer === 2
+    const isHotseatP2Turn = state.gameMode === 'vs-player' && state.currentPlayer === 2
+    const localPlayerNumber: CurrentPlayer = isOnlineGuest || isHotseatP2Turn ? 2 : 1
+
+    for (const { cardId, laneId, owner } of newlyPlayed) {
+      const lane = state.lanes.find(l => l.id === laneId)
+      const side = owner === 1 ? lane?.player1 : lane?.player2
+      const card = side?.cards.find(c => c.id === cardId)
+      if (!card) continue
+      const ownerSuit = owner === 1 ? state.player1Suit : state.player2Suit
+      const ability = stackAbilityForPlayedCard(card, ownerSuit)
+      if (!ability) continue
+      const position = owner === localPlayerNumber ? 'player' : 'opponent'
+      // Defer one frame so the new card has settled into its final layout.
+      requestAnimationFrame(() => {
+        const cardEl = document.querySelector(`[data-lane-id="${laneId}"] [data-card-id="${cardId}"]`)
+        const iconEl = document.querySelector(`[data-fx="${position}-${ability}"]`)
+        flySpark(cardEl, iconEl)
+      })
+    }
+  }, [state.lanes, state.phase, state.player1Suit, state.player2Suit, state.gameMode, state.localPlayer, state.currentPlayer])
   
   // Debug logging for online mode - log on every render when in Main phase
   useEffect(() => {
@@ -263,15 +456,62 @@ export function GameBoard() {
     const player = getActingPlayer()
     if (state.gameMode === 'vs-ai' && player !== 1) return false
     const playerState = player === 1 ? state.player1 : state.player2
-    return playerState.relicsAvailable[relic]
+    const playerSuit = player === 1 ? state.player1Suit : state.player2Suit
+    if (relic === 'skull' && playerSuit === 'spades' && playerState.hand.length === 0) return false
+    if (relic === 'skull' && playerSuit === 'hearts' && (playerState.hand.length === 0 || state.outOfPlayPile.length === 0)) return false
+    return playerState.relicStacks[relic] >= 3
   }
 
   const canUseMinion = (): boolean => {
-    if (state.phase !== 'Main' || !isLocalPlayerTurn || aiLockActive || boardSelectionMode || minionMenuMode) return false
+    if (state.phase !== 'Main' || aiLockActive || boardSelectionMode || minionMenuMode) return false
     const player = getActingPlayer()
     if (state.gameMode === 'vs-ai' && player !== 1) return false
     const playerState = player === 1 ? state.player1 : state.player2
-    return playerState.minionAvailable
+    const playerSuit = player === 1 ? state.player1Suit : state.player2Suit
+    if (playerSuit === 'spades') {
+      return !isLocalPlayerTurn &&
+        playerState.minionStacks >= 3 &&
+        (player === 1 ? state.player1Deck.length : state.player2Deck.length) > 0 &&
+        playerState.lastEndTurnDrawCardIds.length === 3 &&
+        playerState.lastEndTurnDrawCardIds.every(cardId => playerState.hand.some(card => card.id === cardId))
+    }
+    return isLocalPlayerTurn && playerState.minionStacks >= 3
+  }
+
+  const canUseAvatarSupport = (): boolean => {
+    if (state.phase !== 'Main' || !isLocalPlayerTurn || aiLockActive || boardSelectionMode || minionMenuMode) return false
+    const player = getActingPlayer()
+    if (state.gameMode === 'vs-ai' && player !== 1) return false
+    return player === 1 ? state.player1SupportAvailable : state.player2SupportAvailable
+  }
+
+  // Start the short End-Turn lockout after an ability is used.
+  const startAbilityEndTurnCooldown = () => {
+    setAbilityEndTurnCooldown(true)
+    if (abilityCooldownTimeoutRef.current !== null) {
+      window.clearTimeout(abilityCooldownTimeoutRef.current)
+    }
+    abilityCooldownTimeoutRef.current = window.setTimeout(() => {
+      setAbilityEndTurnCooldown(false)
+      abilityCooldownTimeoutRef.current = null
+    }, 500)
+  }
+
+  // Play the ability-use sound + icon pulse at the moment an ability actually
+  // resolves (after any required decision), rather than when its menu opens.
+  const playAbilityUsed = (ability: 'minion' | 'sword' | 'shield' | 'skull') => {
+    playSfx('abilityUse')
+    pulse(document.querySelector(`[data-fx="player-${ability}"]`))
+    startAbilityEndTurnCooldown()
+  }
+
+  const handleAvatarSupportClick = () => {
+    if (!canUseAvatarSupport()) return
+    pulse(document.querySelector('[data-fx="player-avatar"]'))
+    startAbilityEndTurnCooldown()
+    const action = { type: 'USE_SUPPORT' as const, player: getActingPlayer() }
+    dispatch(action)
+    sendNetworkAction(action)
   }
 
   const closeMinionMenu = () => {
@@ -290,11 +530,28 @@ export function GameBoard() {
     setDraggingCardId(null)
     closeMinionMenu()
 
-    if (playerSuit === 'spades' || playerSuit === 'hearts') {
-      const targetCard = playerState.hand[Math.floor(Math.random() * playerState.hand.length)]
-      const action = { type: 'USE_MINION_RANDOM_BUFF' as const, player, cardId: targetCard.id }
+    if (playerSuit === 'spades') {
+      // Spades reroll is instant (no decision), so play the feedback now.
+      // v8 Split Deck: the reroll shuffles the returned cards back into the
+      // acting player's OWN deck and redraws from it, keeping the split even.
+      const cardIds = playerState.lastEndTurnDrawCardIds
+      const returnedCards = cardIds
+        .map(cardId => playerState.hand.find(card => card.id === cardId))
+        .filter((card): card is Card => Boolean(card))
+      const playerDeckCards = player === 1 ? state.player1Deck : state.player2Deck
+      if (returnedCards.length !== 3 || playerDeckCards.length === 0) return
+      const rerollDeck = shuffle([...playerDeckCards, ...returnedCards])
+      const newCards = rerollDeck.slice(0, 3)
+      const playerDeck = rerollDeck.slice(3)
+      playAbilityUsed('minion')
+      const action = { type: 'USE_MINION_SPADES_REROLL' as const, player, cardIds, newCards, playerDeck }
       dispatch(action)
       sendNetworkAction(action)
+      return
+    }
+
+    if (playerSuit === 'hearts') {
+      setMinionMenuMode('hearts-minion-choice')
       return
     }
 
@@ -316,6 +573,7 @@ export function GameBoard() {
 
   const handleMinionSuitSelect = (suit: StandardSuit) => {
     if (!selectedMinionCardId) return
+    playAbilityUsed('minion')
     const action = { type: 'USE_MINION_CLUBS_CHANGE_SUIT' as const, player: getActingPlayer(), cardId: selectedMinionCardId, suit }
     dispatch(action)
     sendNetworkAction(action)
@@ -323,7 +581,45 @@ export function GameBoard() {
   }
 
   const handleMinionDiamondsCardSelect = (cardId: string) => {
+    playAbilityUsed('minion')
     const action = { type: 'USE_MINION_DIAMONDS_RANK_UP' as const, player: getActingPlayer(), cardId }
+    dispatch(action)
+    sendNetworkAction(action)
+    closeMinionMenu()
+  }
+
+  const handleSpadesSkullCardSelect = (card: Card) => {
+    const randomRanks: Rank[] = [...STANDARD_RANKS, 'JOKER']
+    const replacement: Card = {
+      ...card,
+      suit: STANDARD_SUITS[Math.floor(Math.random() * STANDARD_SUITS.length)],
+      rank: randomRanks[Math.floor(Math.random() * randomRanks.length)],
+    }
+    playAbilityUsed('skull')
+    const action = { type: 'USE_RELIC_SPADES_SKULL_RANDOMIZE' as const, player: getActingPlayer(), cardId: card.id, replacement }
+    dispatch(action)
+    sendNetworkAction(action)
+    closeMinionMenu()
+  }
+
+  const handleHeartsMinionRelicSelect = (relic: 'sword' | 'shield') => {
+    playAbilityUsed('minion')
+    const action = { type: 'USE_MINION_HEARTS_RELIC_STACKS' as const, player: getActingPlayer(), relic }
+    dispatch(action)
+    sendNetworkAction(action)
+    closeMinionMenu()
+  }
+
+  const handleHeartsSkullCardSelect = (card: Card) => {
+    if (state.outOfPlayPile.length === 0) return
+    const sourceDiscardCard = state.outOfPlayPile[Math.floor(Math.random() * state.outOfPlayPile.length)]
+    playAbilityUsed('skull')
+    const action = {
+      type: 'USE_RELIC_HEARTS_SKULL_FROM_DISCARD' as const,
+      player: getActingPlayer(),
+      cardId: card.id,
+      sourceDiscardCardId: sourceDiscardCard.id,
+    }
     dispatch(action)
     sendNetworkAction(action)
     closeMinionMenu()
@@ -335,6 +631,12 @@ export function GameBoard() {
     setDraggingCardId(null)
     setSelectedRelicCard(null)
     setMoveSourceLane(null)
+    const player = getActingPlayer()
+    const playerSuit = player === 1 ? state.player1Suit : state.player2Suit
+    if (relic === 'skull' && (playerSuit === 'spades' || playerSuit === 'hearts')) {
+      setMinionMenuMode(playerSuit === 'spades' ? 'spades-skull-card' : 'hearts-skull-card')
+      return
+    }
     if (relic === 'shield') {
       setBoardSelectionMode('relic-shield-lane')
     } else if (relic === 'sword') {
@@ -378,6 +680,7 @@ export function GameBoard() {
   const handleBoardSelectionClick = (laneId: LaneId) => {
     if (boardSelectionMode === 'relic-shield-lane') {
       const player = getActingPlayer()
+      playAbilityUsed('shield')
       const action = { type: 'USE_RELIC_SHIELD' as const, player, laneId }
       dispatch(action)
       sendNetworkAction(action)
@@ -387,6 +690,7 @@ export function GameBoard() {
 
     if (boardSelectionMode === 'relic-sword-lane') {
       const player = getActingPlayer()
+      playAbilityUsed('sword')
       const action = { type: 'USE_RELIC_SWORD' as const, player, laneId }
       dispatch(action)
       sendNetworkAction(action)
@@ -403,6 +707,7 @@ export function GameBoard() {
       const ownTargetCards = player === 1 ? lane.player1.cards : lane.player2.cards
       if (ownTargetCards.length >= 3) return
 
+      playAbilityUsed('skull')
       const action = {
         type: 'USE_RELIC_SKULL' as const,
         player,
@@ -489,6 +794,7 @@ export function GameBoard() {
     
     // Mark resolution as showing immediately (synchronous)
     isResolutionShowingRef.current = true
+    playSfx('startLaneResolve')
     
     // Determine winner relative to local perspective
     const isOnlineGuest = state.gameMode === 'online' && state.localPlayer === 2
@@ -511,13 +817,21 @@ export function GameBoard() {
       baseDamage: resolution.baseDamage,
       bonusDamage: resolution.bonusDamage,
       bonusHealing: resolution.bonusHealing,
+      p1Cards: shouldFlipPerspective ? resolution.player2Cards ?? [] : resolution.player1Cards ?? [],
+      p2Cards: shouldFlipPerspective ? resolution.player1Cards ?? [] : resolution.player2Cards ?? [],
+      p1HandLabel: HAND_LABELS[shouldFlipPerspective ? resolution.player2HandType ?? 'high-card' : resolution.player1HandType ?? 'high-card'],
+      p2HandLabel: HAND_LABELS[shouldFlipPerspective ? resolution.player1HandType ?? 'high-card' : resolution.player2HandType ?? 'high-card'],
+      p1BaseDamage: shouldFlipPerspective ? resolution.player2BaseDamage ?? 0 : resolution.player1BaseDamage ?? 0,
+      p2BaseDamage: shouldFlipPerspective ? resolution.player1BaseDamage ?? 0 : resolution.player2BaseDamage ?? 0,
+      p1PokerBonus: shouldFlipPerspective ? resolution.player2PokerBonus ?? 0 : resolution.player1PokerBonus ?? 0,
+      p2PokerBonus: shouldFlipPerspective ? resolution.player1PokerBonus ?? 0 : resolution.player2PokerBonus ?? 0,
     })
     
     // Store HP targets for animation during overlay
     const targetP1 = state.player1.hp
     const targetP2 = state.player2.hp
     
-    // Start HP animation 1.5 seconds into the overlay (while it's still showing)
+    // Start HP animation near the end of the longer reveal overlay.
     const hpAnimationTimeoutId = setTimeout(() => {
       if (targetP1 !== player1DisplayHP) {
         animateHP(1, player1DisplayHP, targetP1)
@@ -525,13 +839,22 @@ export function GameBoard() {
       if (targetP2 !== player2DisplayHP) {
         animateHP(2, player2DisplayHP, targetP2)
       }
-    }, 1500)
+    }, 4600)
     
-    // Clear animation after 3.5 seconds (extra second to show bonus effects)
+    // Clear animation after 5 seconds.
     const overlayTimeoutId = setTimeout(() => {
+      playSfx('endLaneResolve')
       isResolutionShowingRef.current = false
       setResolutionAnimation(null)
-    }, 3500)
+      setLaneResolveEndTurnCooldown(true)
+      if (laneResolveCooldownTimeoutRef.current !== null) {
+        window.clearTimeout(laneResolveCooldownTimeoutRef.current)
+      }
+      laneResolveCooldownTimeoutRef.current = window.setTimeout(() => {
+        setLaneResolveEndTurnCooldown(false)
+        laneResolveCooldownTimeoutRef.current = null
+      }, 1000)
+    }, 5200)
     
     return () => {
       clearTimeout(hpAnimationTimeoutId)
@@ -562,6 +885,12 @@ export function GameBoard() {
   
   // Helper function to animate HP change (both damage and healing) with flash effect
   const animateHP = (player: 1 | 2, startHP: number, targetHP: number) => {
+    const frameKey = player === 1 ? 'player1' : 'player2'
+    if (hpAnimationFrameRefs.current[frameKey] !== null) {
+      cancelAnimationFrame(hpAnimationFrameRefs.current[frameKey]!)
+      hpAnimationFrameRefs.current[frameKey] = null
+    }
+
     const isHealing = targetHP > startHP
     
     // Set the appropriate animation state
@@ -595,8 +924,9 @@ export function GameBoard() {
       }
       
       if (progress < 1) {
-        requestAnimationFrame(animate)
+        hpAnimationFrameRefs.current[frameKey] = requestAnimationFrame(animate)
       } else {
+        hpAnimationFrameRefs.current[frameKey] = null
         // Clear the animation state
         if (player === 1) {
           setPlayer1TakingDamage(false)
@@ -607,8 +937,22 @@ export function GameBoard() {
         }
       }
     }
-    requestAnimationFrame(animate)
+    hpAnimationFrameRefs.current[frameKey] = requestAnimationFrame(animate)
   }
+
+  useEffect(() => {
+    return () => {
+      if (hpAnimationFrameRefs.current.player1 !== null) {
+        cancelAnimationFrame(hpAnimationFrameRefs.current.player1)
+      }
+      if (hpAnimationFrameRefs.current.player2 !== null) {
+        cancelAnimationFrame(hpAnimationFrameRefs.current.player2)
+      }
+      if (laneResolveCooldownTimeoutRef.current !== null) {
+        window.clearTimeout(laneResolveCooldownTimeoutRef.current)
+      }
+    }
+  }, [])
 
   // Auto-trigger the war flip when entering InitialFlip phase
   // In online mode, only the HOST executes the flip to avoid desync
@@ -633,6 +977,7 @@ export function GameBoard() {
   useEffect(() => {
     if (state.phase === 'InitialFlipResult') {
       setFlipAnimationStage('cards')
+      playSfx('warFlip', { loop: true, volume: 0.5 })
       
       // In online mode, host syncs the flip result state to guest
       if (state.gameMode === 'online' && state.isHost && Network.isConnected()) {
@@ -660,6 +1005,7 @@ export function GameBoard() {
 
       // Stage 3: Continue to main phase (1s more)
       const timer3 = setTimeout(() => {
+        stopSfx('warFlip')
         if (state.gameMode === 'online' && !state.isHost) return
         const action = { type: 'CONTINUE_FROM_FLIP' as const }
         dispatch(action)
@@ -673,6 +1019,7 @@ export function GameBoard() {
         clearTimeout(timer1)
         clearTimeout(timer2)
         clearTimeout(timer3)
+        stopSfx('warFlip')
       }
     }
   }, [state.phase, state.gameMode, state.isHost])
@@ -739,7 +1086,7 @@ export function GameBoard() {
   // cards on the board. The UI is responsible for pacing:
   //
   //   1. While the queue still has lanes, wait for the previous lane's
-  //      resolution overlay to finish (~3500ms), then dispatch
+  //      resolution overlay to finish (~5000ms), then dispatch
   //      RESOLVE_NEXT_END_OF_ROUND_LANE - the reducer pops the next lane and
   //      runs resolveLane on it, which writes a fresh `lastLaneResolution`
   //      and triggers the overlay animation.
@@ -756,7 +1103,7 @@ export function GameBoard() {
     if (state.phase !== 'EndOfRoundResolving') return
     if (state.gameMode === 'online' && !state.isHost) return
 
-    const ROUND_END_DELAY_MS = 3700
+    const ROUND_END_DELAY_MS = 5400
 
     if (state.pendingRoundEndLanes.length > 0) {
       const timeoutId = setTimeout(() => {
@@ -785,6 +1132,14 @@ export function GameBoard() {
   const handleNetworkAction = useCallback((action: any) => {
     console.log('[GameBoard] Received network action:', action.type, action.action?.type)
 
+    // The host tracks the highest sequence it has seen from the guest. Delivery
+    // is ordered (out-of-order/gapped messages are filtered upstream), so by the
+    // time we process sequence N we have processed every guest message up to N.
+    // This value is echoed back inside authoritative snapshots as `ackSeq`.
+    if (stateRef.current.isHost && typeof action.sequence === 'number') {
+      lastReceivedRemoteSeqRef.current = Math.max(lastReceivedRemoteSeqRef.current, action.sequence)
+    }
+
     if (action.type === 'SNAPSHOT_REQUESTED') {
       const latestState = stateRef.current
       if (latestState.isHost && latestState.onlineMatchId) {
@@ -805,21 +1160,44 @@ export function GameBoard() {
     // Handle incoming game actions from opponent
     if (action.type === 'GAME_ACTION') {
       const gameAction = action.action;
+      const normalizedGameAction = gameAction.type === 'END_TURN' && !gameAction.player && action.senderSlot
+        ? { ...gameAction, player: action.senderSlot as CurrentPlayer }
+        : gameAction;
       
       // Mark all game actions as fromNetwork for proper handling
-      const actionWithFlag = { ...gameAction, fromNetwork: true };
+      const actionWithFlag = { ...normalizedGameAction, fromNetwork: true };
       dispatch(actionWithFlag);
       
       // Show "Your Turn" popup when opponent ends turn
-      if (gameAction.type === 'END_TURN') {
+      if (normalizedGameAction.type === 'END_TURN') {
         console.log('[Network] Opponent ended turn - should be our turn now');
+        playSfx('playersTurnToPlay')
         setShowYourTurn(true)
         setTimeout(() => setShowYourTurn(false), 1500)
-        
-        // Debug: Log state after a short delay to see if reducer worked
-        setTimeout(() => {
-          console.log('[Network Debug] After END_TURN processed - checking if we can act');
-        }, 100);
+
+        // Self-heal: if the turn handoff didn't actually take effect here (the
+        // reducer dropped it because of a transient phase/currentPlayer
+        // mismatch), both clients can end up locked out. Detect that and
+        // re-sync from the host's authoritative state.
+        const endingPlayer = normalizedGameAction.player as CurrentPlayer | undefined
+        if (endingPlayer) {
+          const expectedCurrentPlayer: CurrentPlayer = endingPlayer === 1 ? 2 : 1
+          setTimeout(() => {
+            const latest = stateRef.current
+            if (
+              latest.gameMode === 'online' &&
+              latest.phase === 'Main' &&
+              latest.currentPlayer !== expectedCurrentPlayer
+            ) {
+              console.warn('[Network] END_TURN did not advance the turn here - re-syncing to recover')
+              if (latest.isHost) {
+                Network.sendAction({ type: 'STATE_SYNC', state: latest, reason: 'end-turn-desync-host' })
+              } else {
+                Network.sendAction({ type: 'REQUEST_SNAPSHOT', reason: 'end-turn-desync-guest' })
+              }
+            }
+          }, 600)
+        }
       }
     }
     
@@ -828,11 +1206,46 @@ export function GameBoard() {
       dispatch({ type: 'OPPONENT_SUIT_SELECTED', suit: action.suit })
     }
     
-    // Handle state sync (for guest joining)
+    // Handle state sync from the authoritative host.
     if (action.type === 'STATE_SYNC') {
-      dispatch({ type: 'SYNC_STATE', state: action.state })
-      if (typeof action.sequence === 'number') {
-        dispatch({ type: 'SET_ONLINE_SEQUENCE', sequence: action.sequence })
+      // Recovery snapshots (sequence gaps, explicit requests, desync heals)
+      // carry a `reason` and must always be adopted. Routine authoritative
+      // snapshots are ack-gated: if the host has not yet applied our latest
+      // in-flight action (ackSeq < our pending sequence), adopting now would
+      // briefly revert our own optimistic move, so we skip it and wait for the
+      // next snapshot (the host broadcasts again right after applying it).
+      const isRecovery = typeof action.reason === 'string' && action.reason.length > 0
+      const ackSeq: number | undefined = typeof action.ackSeq === 'number' ? action.ackSeq : undefined
+      const guestHasUnackedAction =
+        !stateRef.current.isHost &&
+        ackSeq !== undefined &&
+        ackSeq < pendingLocalSeqRef.current
+
+      if (!isRecovery && guestHasUnackedAction) {
+        console.log('[Network] Holding authoritative snapshot until host acks our action', {
+          ackSeq,
+          pending: pendingLocalSeqRef.current,
+        })
+        // Safety net: if the host's state stops changing while we're holding
+        // (e.g. it rejected our action and won't re-broadcast), ask for an
+        // authoritative snapshot so we can never get stuck.
+        if (holdRecoveryTimerRef.current === null) {
+          holdRecoveryTimerRef.current = window.setTimeout(() => {
+            holdRecoveryTimerRef.current = null
+            if (!stateRef.current.isHost && Network.isConnected()) {
+              Network.sendAction({ type: 'REQUEST_SNAPSHOT', reason: 'guest-hold-timeout' })
+            }
+          }, 800)
+        }
+      } else {
+        if (holdRecoveryTimerRef.current !== null) {
+          window.clearTimeout(holdRecoveryTimerRef.current)
+          holdRecoveryTimerRef.current = null
+        }
+        dispatch({ type: 'SYNC_STATE', state: action.state })
+        if (typeof action.sequence === 'number') {
+          dispatch({ type: 'SET_ONLINE_SEQUENCE', sequence: action.sequence })
+        }
       }
     }
     
@@ -875,6 +1288,67 @@ export function GameBoard() {
     }, 250)
 
     return () => clearTimeout(timeoutId)
+  }, [state])
+
+  // Host-authoritative reconciliation.
+  //
+  // The host is the single source of truth. After any change to the live game
+  // state it pushes its full state to the guest, which reconciles to it. This
+  // is what keeps the two clients in sync despite non-deterministic reducer
+  // steps (e.g. effect handlers that mint card ids with Date.now()) and any
+  // dropped/garbled/late action: drift self-corrects within one debounce, and
+  // the End-Turn handoff can never leave a client stuck because the guest's
+  // currentPlayer is continuously realigned to the host's.
+  //
+  // Scoped to the Main phase on purpose. Deck reshuffles happen in
+  // startNewRound and are already host-authoritative (the guest receives the
+  // fresh deck via the FLIP_RESULT_SYNC pipeline each round). The animated
+  // flip / end-of-round resolution flows dedupe on Date.now() timestamps, so
+  // re-broadcasting full state there would replay their overlays - we leave
+  // those to their existing dedicated sync paths.
+  useEffect(() => {
+    if (state.gameMode !== 'online' || !state.isHost) return
+    if (state.phase !== 'Main') return
+    if (!Network.isConnected()) return
+
+    if (authoritativeBroadcastTimerRef.current !== null) {
+      window.clearTimeout(authoritativeBroadcastTimerRef.current)
+    }
+    // Debounce so a burst of state changes coalesces into one snapshot built
+    // from the final state.
+    authoritativeBroadcastTimerRef.current = window.setTimeout(() => {
+      authoritativeBroadcastTimerRef.current = null
+      if (!Network.isConnected()) return
+      const latest = stateRef.current
+      if (latest.gameMode !== 'online' || !latest.isHost || latest.phase !== 'Main') return
+
+      // Skip the broadcast when nothing meaningful changed. We still broadcast
+      // whenever the ack advanced (the guest may be holding an optimistic move
+      // and needs the updated ack to release it), even if state looks identical.
+      const ackSeq = lastReceivedRemoteSeqRef.current
+      const signature = JSON.stringify(latest)
+      if (
+        signature === lastBroadcastSignatureRef.current &&
+        ackSeq === lastBroadcastAckRef.current
+      ) {
+        return
+      }
+      lastBroadcastSignatureRef.current = signature
+      lastBroadcastAckRef.current = ackSeq
+
+      Network.sendAction({
+        type: 'STATE_SYNC',
+        state: latest,
+        ackSeq,
+      })
+    }, 120)
+
+    return () => {
+      if (authoritativeBroadcastTimerRef.current !== null) {
+        window.clearTimeout(authoritativeBroadcastTimerRef.current)
+        authoritativeBroadcastTimerRef.current = null
+      }
+    }
   }, [state])
 
   useEffect(() => {
@@ -938,7 +1412,14 @@ export function GameBoard() {
   const sendNetworkAction = useCallback((action: any) => {
     if (state.gameMode === 'online' && Network.isConnected()) {
       Network.sendAction({ type: 'GAME_ACTION', action })
-      dispatch({ type: 'SET_ONLINE_SEQUENCE', sequence: Network.getOutgoingSequence() })
+      const seq = Network.getOutgoingSequence()
+      dispatch({ type: 'SET_ONLINE_SEQUENCE', sequence: seq })
+      // Guests: remember the sequence of our latest in-flight action so we can
+      // hold off on adopting an authoritative snapshot until the host has
+      // applied it (prevents our optimistic move from being reverted).
+      if (!stateRef.current.isHost) {
+        pendingLocalSeqRef.current = seq
+      }
     }
   }, [state.gameMode])
 
@@ -1146,10 +1627,11 @@ export function GameBoard() {
 
   const handleEndTurn = () => {
     // Only the current player can end their turn
+    if (endTurnDisabled) return
     if (!canEndTurn(state)) return
     if (!isLocalPlayerTurn) return
     setSelectedCardId(null)
-    const action = { type: 'END_TURN' as const }
+    const action = { type: 'END_TURN' as const, player: getActingPlayer() }
     dispatch(action)
     sendNetworkAction(action)
   }
@@ -1408,7 +1890,8 @@ export function GameBoard() {
     // v6 Poker Rework: lane total preview uses evaluateBestHand over
     // player cards + per-lane community + all-lane community.
     const allLaneCommunityCard = state.allLaneCommunityCard ?? null
-    const topDisplay = getLaneDisplay(topCards, laneCommunityCard ?? null, allLaneCommunityCard)
+    const topVisibleCards = topCards.filter((_, idx) => idx !== 2)
+    const topDisplay = getLaneDisplay(topVisibleCards, laneCommunityCard ?? null, allLaneCommunityCard)
     const bottomDisplay = getLaneDisplay(bottomCards, laneCommunityCard ?? null, allLaneCommunityCard)
     const topBaseSum = topDisplay.baseSum
     const topBonus = topDisplay.bonus
@@ -1481,6 +1964,7 @@ export function GameBoard() {
                 <div key={card.id} className="stacked-card" style={{ zIndex: idx + 1 }}>
                   <CardView
                     card={card}
+                    faceDown={idx === 2}
                     small
                     ownerSuit={topSuit}
                     laneCards={topCards}
@@ -1492,7 +1976,7 @@ export function GameBoard() {
           </div>
 
         {/* Per-lane community poker card slot. v7 Cycling Lane Flow: this slot
-            is refreshed (discarded + redrawn from sharedDeck) every time the
+            is refreshed (discarded + redrawn from the community pool) every time the
             lane resolves, so it can change multiple times within a single round. */}
         <div
           className={`community-poker-slot lane-community-slot ${laneLocked ? 'community-slot-locked' : ''}`}
@@ -1500,7 +1984,7 @@ export function GameBoard() {
           aria-label={communitySlotId}
         >
           {laneCommunityCard ? (
-            <CardView card={laneCommunityCard} small />
+            <CardView card={laneCommunityCard} small communityCard />
           ) : laneLocked ? (
             <span className="lane-lock-icon" aria-label="Lane locked">🔒</span>
           ) : (
@@ -1571,56 +2055,87 @@ export function GameBoard() {
   }
 
   // Avatar component with pentagonal frame
-  const Avatar = ({ suit, isPlayer, takingDamage = false, healing = false, isTurnActive = false }: { suit: StandardSuit | null; isPlayer: boolean; takingDamage?: boolean; healing?: boolean; isTurnActive?: boolean }) => (
-    <div className={`avatar-frame ${isPlayer ? 'player' : 'opponent'} ${takingDamage ? 'taking-damage' : ''} ${healing ? 'healing' : ''} ${isTurnActive ? 'turn-active' : ''}`}>
+  const Avatar = ({
+    suit,
+    isPlayer,
+    takingDamage = false,
+    healing = false,
+    isTurnActive = false,
+    supportAvailable = false,
+    canUseSupport = false,
+    onSupportClick,
+    fxKey,
+  }: {
+    suit: StandardSuit | null
+    isPlayer: boolean
+    takingDamage?: boolean
+    healing?: boolean
+    isTurnActive?: boolean
+    supportAvailable?: boolean
+    canUseSupport?: boolean
+    onSupportClick?: () => void
+    fxKey?: string
+  }) => (
+    <div
+      data-fx={fxKey}
+      className={`avatar-frame ${isPlayer ? 'player' : 'opponent'} ${takingDamage ? 'taking-damage' : ''} ${healing ? 'healing' : ''} ${isTurnActive ? 'turn-active' : ''} ${supportAvailable ? 'support-ready' : ''} ${canUseSupport ? 'clickable' : ''}`}
+      onClick={canUseSupport ? onSupportClick : undefined}
+      role={canUseSupport ? 'button' : undefined}
+      aria-label={canUseSupport ? 'Use avatar heal for 3 health' : undefined}
+      title={supportAvailable ? 'Avatar heal ready: gain 3 health' : undefined}
+    >
       <img src={getAvatarPath(suit)} alt={isPlayer ? 'Player avatar' : 'AI avatar'} />
     </div>
   )
 
-  const MinionIcon = ({
+  const MinionIcon = useCallback(({
     suit,
-    isActive = false,
+    stackCount = 0,
     canActivate = false,
     onClick,
+    fxKey,
   }: {
     suit: StandardSuit | null
-    isActive?: boolean
+    stackCount?: number
     canActivate?: boolean
     onClick?: () => void
+    fxKey?: string
   }) => {
     const [showTooltip, setShowTooltip] = useState(false)
     const [tooltipPinned, setTooltipPinned] = useState(false)
     const [tooltipPortalRect, setTooltipPortalRect] = useState<{ top: number; left: number; position: 'above' | 'below' } | null>(null)
     const minionRef = useRef<HTMLDivElement>(null)
+    const isActive = stackCount >= 3
     const status = isActive ? 'Active' : 'Inactive'
+    const progressText = `${Math.min(stackCount, 3)}/3 stacks`
     const tooltipData = (() => {
       if (suit === 'spades') {
         return {
           header: `Spades Minion (${status})`,
-          damage: '+3 Damage Buff',
-          description: 'Randomly empowers one card in your hand.',
-          effect: 'If that card is used in lane damage calculation, it adds +3 lane damage.',
+          damage: `Enemy-Turn Reroll (${progressText})`,
+          description: 'Only usable on the enemy turn after you draw 3 cards.',
+          effect: 'Shuffle those 3 drawn cards back into the deck, shuffle, then draw 3 new cards. Requires cards remaining in deck.',
         }
       }
       if (suit === 'hearts') {
         return {
           header: `Hearts Minion (${status})`,
-          damage: '+3 Healing Buff',
-          description: 'Randomly empowers one card in your hand.',
-          effect: 'If that card is used in lane damage calculation, you heal 3 HP.',
+          damage: `Ability Charge (${progressText})`,
+          description: 'Choose Sword or Shield.',
+          effect: 'Gain 2 stacks for the chosen Sword or Shield.',
         }
       }
       if (suit === 'clubs') {
         return {
           header: `Clubs Minion (${status})`,
-          damage: 'Suit Change',
+          damage: `Suit Change (${progressText})`,
           description: 'Choose a card in your hand.',
           effect: 'Change that card to a suit of your choice.',
         }
       }
       return {
         header: `Diamonds Minion (${status})`,
-        damage: 'Rank Up',
+        damage: `Rank Up (${progressText})`,
         description: 'Choose a non-Joker card in your hand.',
         effect: 'Increase its rank by one. Ace becomes Joker.',
       }
@@ -1675,8 +2190,9 @@ export function GameBoard() {
     return (
       <div
         ref={minionRef}
+        data-fx={fxKey}
         className={`support-icon minion-icon ${isActive ? 'minion-active' : ''} ${canActivate ? 'clickable' : ''} ${showTooltip ? 'tooltip-visible' : ''}`}
-        aria-label={`Minion ability ${isActive ? 'active' : 'inactive'}`}
+        aria-label={`Minion ability ${isActive ? 'active' : 'inactive'} ${progressText}`}
         onMouseEnter={() => setShowTooltip(true)}
         onMouseLeave={() => {
           if (!tooltipPinned) setShowTooltip(false)
@@ -1687,7 +2203,7 @@ export function GameBoard() {
           if (canActivate) onClick?.()
         }}
       >
-        <img src={getMinionPath(suit, isActive)} alt="minion ability icon" />
+        <img src={getMinionPath(suit, stackCount)} alt="minion ability icon" />
 
         {showTooltip && tooltipPortalRect && typeof document !== 'undefined' && document.body &&
           createPortal(
@@ -1712,38 +2228,30 @@ export function GameBoard() {
           )}
       </div>
     )
-  }
+  }, [])
 
-  const getRelicTooltip = (relic: RelicType, isActive: boolean): string => {
-    const status = isActive ? 'active' : 'inactive'
-    const refreshText = isActive ? '' : ' Refreshes at the next War Flip.'
-    if (relic === 'shield') {
-      return `Shield relic (${status}): Select a lane to shield for 50% damage reduction on that lane's next resolve.${refreshText}`
-    }
-    if (relic === 'skull') {
-      return `Skull relic (${status}): Move one of your played cards to another non-full lane.${refreshText}`
-    }
-    return `Sword relic (${status}): Select a lane to double your poker bonus on that lane's next resolve.${refreshText}`
-  }
-
-  const RelicIcon = ({
+  const RelicIcon = useCallback(({
     suit,
     relic,
-    isActive = false,
+    stackCount = 0,
     canActivate = false,
     onClick,
+    fxKey,
   }: {
     suit: StandardSuit | null
     relic: RelicType
-    isActive?: boolean
+    stackCount?: number
     canActivate?: boolean
     onClick?: () => void
+    fxKey?: string
   }) => {
     const [showTooltip, setShowTooltip] = useState(false)
     const [tooltipPinned, setTooltipPinned] = useState(false)
     const [tooltipPortalRect, setTooltipPortalRect] = useState<{ top: number; left: number; position: 'above' | 'below' } | null>(null)
     const relicRef = useRef<HTMLDivElement>(null)
-    const tooltipText = getRelicTooltip(relic, isActive)
+    const isActive = stackCount >= 3
+    const tooltipText = getRelicTooltip(relic, isActive, stackCount, suit)
+    const progressText = `${Math.min(stackCount, 3)}/3 stacks`
 
     const updateTooltipRect = useCallback(() => {
       if (!showTooltip || !relicRef.current) {
@@ -1799,23 +2307,39 @@ export function GameBoard() {
       const status = isActive ? 'Active' : 'Inactive'
       if (relic === 'shield') {
         return {
-          header: `Shield Relic (${status})`,
-          damage: 'Lane Defense',
+          header: `Shield (${status})`,
+          damage: `Lane Defense (${progressText})`,
           description: 'Select any lane to shield your side.',
           effect: 'The next damage you take from that lane is reduced by 50% (rounded up).',
         }
       }
       if (relic === 'skull') {
+        if (suit === 'hearts') {
+          return {
+            header: `Relic (${status})`,
+            damage: `Discard Transform (${progressText})`,
+            description: 'Choose a card in your hand.',
+            effect: 'Transform it into a random card from the discard pile.',
+          }
+        }
+        if (suit === 'spades') {
+          return {
+            header: `Relic (${status})`,
+            damage: `Hand Randomize (${progressText})`,
+            description: 'Choose a card in your hand.',
+            effect: 'Transform it into a random suit and rank.',
+          }
+        }
         return {
-          header: `Skull Relic (${status})`,
-          damage: 'Card Movement',
+          header: `Relic (${status})`,
+          damage: `Card Movement (${progressText})`,
           description: 'Select one of your played cards, then choose another lane.',
           effect: 'Move that card to a non-full lane on your side.',
         }
       }
       return {
-        header: `Sword Relic (${status})`,
-        damage: 'Poker Bonus',
+        header: `Sword (${status})`,
+        damage: `Poker Bonus (${progressText})`,
         description: 'Select any lane to empower your next resolve there.',
         effect: 'Doubles only your poker bonus contribution on that lane.',
       }
@@ -1824,7 +2348,8 @@ export function GameBoard() {
     return (
       <div
         ref={relicRef}
-        className={`support-icon relic-icon ${isActive ? 'relic-active' : ''} ${canActivate ? 'clickable' : ''} ${showTooltip ? 'tooltip-visible' : ''}`}
+        data-fx={fxKey}
+        className={`support-icon relic-icon relic-${relic} ${isActive ? 'relic-active' : ''} ${canActivate ? 'clickable' : ''} ${showTooltip ? 'tooltip-visible' : ''}`}
         aria-label={tooltipText}
         onMouseEnter={() => setShowTooltip(true)}
         onMouseLeave={() => {
@@ -1836,7 +2361,7 @@ export function GameBoard() {
           if (canActivate) onClick?.()
         }}
       >
-        <img src={getRelicPath(suit, relic, isActive)} alt={`${relic} icon`} />
+        <img src={getRelicPath(suit, relic, stackCount)} alt={`${relic === 'skull' ? 'relic' : relic} icon`} />
 
         {showTooltip && tooltipPortalRect && typeof document !== 'undefined' && document.body &&
           createPortal(
@@ -1861,7 +2386,7 @@ export function GameBoard() {
           )}
       </div>
     )
-  }
+  }, [])
 
   // HP Display component
   const HPDisplay = ({ hp, isPlayer }: { hp: number; isPlayer: boolean }) => (
@@ -1871,26 +2396,32 @@ export function GameBoard() {
     </div>
   )
 
-  // v4 Shared Deck: hands remaining = shared deck size / 6 (3 cards per player per round)
-  const handsRemaining = Math.floor(state.sharedDeck.length / 6)
-  const deckGlowClass = handsRemaining === 2 ? 'deck-glow-warning' : handsRemaining <= 1 ? 'deck-glow-danger' : ''
-  const sharedDeckEmpty = state.sharedDeck.length === 0
+  // v8 Split Deck: each player draws from their own deck, so the per-player
+  // counts shown in the deck lane are simply the real personal deck sizes.
+  const player1DeckCount = state.player1Deck.length
+  const player2DeckCount = state.player2Deck.length
+  // "Turns of fuel left" is now per-player (3 drawn per turn from your own deck).
+  const minDeckCount = Math.min(player1DeckCount, player2DeckCount)
+  const turnsRemaining = Math.floor(minDeckCount / 3)
+  const deckGlowClass = turnsRemaining === 2 ? 'deck-glow-warning' : turnsRemaining <= 1 ? 'deck-glow-danger' : ''
+  const getProjectedDeckCountForPlayer = (player: CurrentPlayer): number =>
+    player === 1 ? player1DeckCount : player2DeckCount
 
   // Draw pile component - now uses field control suit for card back
-  const DrawPile = ({ count, glowClass = '', showEmptyOutline = false }: { count: number; glowClass?: string; showEmptyOutline?: boolean }) => (
+  const DrawPile = ({ count, glowClass = '', showEmptyOutline = false, hideCount = false }: { count: number; glowClass?: string; showEmptyOutline?: boolean; hideCount?: boolean }) => (
     <div className={`draw-pile ${glowClass}`}>
       {showEmptyOutline ? (
         <div className="draw-pile-empty-outline" aria-label="Empty deck" />
       ) : (
-        <CardView 
-          card={{ id: 'draw-pile', suit: 'hearts', rank: 2 }} 
-          faceDown 
-          small 
+        <CardView
+          card={{ id: 'draw-pile', suit: 'hearts', rank: 2 }}
+          faceDown
+          small
           cardBackType="ai"
           cardBackSuit={state.fieldControlSuit}
         />
       )}
-      <span className="draw-pile-count">{count}</span>
+      {!hideCount && <span className="draw-pile-count">{count}</span>}
     </div>
   )
 
@@ -1907,13 +2438,36 @@ export function GameBoard() {
       ? 'Choose New Suit'
       : minionMenuMode === 'diamonds-card'
         ? 'Choose a Card to Rank Up'
-        : 'Choose a Card to Change Suit'
+        : minionMenuMode === 'hearts-minion-choice'
+          ? 'Choose Relic Stacks'
+          : minionMenuMode === 'hearts-skull-card'
+            ? 'Choose a Card to Transform'
+            : minionMenuMode === 'spades-skull-card'
+              ? 'Choose a Card to Randomize'
+              : 'Choose a Card to Change Suit'
 
     return (
       <div className="minion-menu-overlay">
         <div className="minion-menu">
           <div className="minion-menu-title">{title}</div>
-          {minionMenuMode === 'clubs-suit' && selectedCard ? (
+          {minionMenuMode === 'hearts-minion-choice' ? (
+            <div className="minion-suit-options">
+              <button
+                className="minion-suit-option"
+                onClick={() => handleHeartsMinionRelicSelect('sword')}
+              >
+                <span className="minion-suit-emoji">⚔</span>
+                <span className="minion-suit-label">Sword</span>
+              </button>
+              <button
+                className="minion-suit-option"
+                onClick={() => handleHeartsMinionRelicSelect('shield')}
+              >
+                <span className="minion-suit-emoji">🛡</span>
+                <span className="minion-suit-label">Shield</span>
+              </button>
+            </div>
+          ) : minionMenuMode === 'clubs-suit' && selectedCard ? (
             <>
               <div className="minion-selected-card">
                 <CardView card={selectedCard} small ownerSuit={playerSuit} />
@@ -1940,6 +2494,10 @@ export function GameBoard() {
                   onClick={() => {
                     if (minionMenuMode === 'diamonds-card') {
                       handleMinionDiamondsCardSelect(card.id)
+                    } else if (minionMenuMode === 'spades-skull-card') {
+                      handleSpadesSkullCardSelect(card)
+                    } else if (minionMenuMode === 'hearts-skull-card') {
+                      handleHeartsSkullCardSelect(card)
                     } else {
                       handleMinionClubsCardSelect(card.id)
                     }
@@ -2330,12 +2888,37 @@ export function GameBoard() {
   }
 
   const phaseColor = 
-    state.phase === 'Main' && isPlayerTurn ? '#22c55e' :
-    state.phase === 'Main' && !isPlayerTurn ? '#ef4444' :
+    state.phase === 'Main' && isLocalPlayerTurn ? '#22c55e' :
+    state.phase === 'Main' && !isLocalPlayerTurn ? '#ef4444' :
     state.phase === 'InitialFlip' ? '#3b82f6' :
     state.phase === 'InitialFlipResult' ? '#3b82f6' :
     state.phase === 'EndOfRoundResolving' ? '#f97316' :
     state.phase === 'SuddenDeath' ? '#a855f7' : '#eab308'
+  const isOverlayOnlineGuest = state.gameMode === 'online' && state.localPlayer === 2
+  const isOverlayHotseatP2Turn = state.gameMode === 'vs-player' && state.currentPlayer === 2
+  const shouldFlipOverlayPerspective = isOverlayOnlineGuest || isOverlayHotseatP2Turn
+  const resolutionPlayerSuit = shouldFlipOverlayPerspective ? state.player2Suit : state.player1Suit
+  const resolutionOpponentSuit = shouldFlipOverlayPerspective ? state.player1Suit : state.player2Suit
+  const topDeckCountPlayer: CurrentPlayer = shouldFlipOverlayPerspective ? 1 : 2
+  const bottomDeckCountPlayer: CurrentPlayer = shouldFlipOverlayPerspective ? 2 : 1
+  const topDeckCount = getProjectedDeckCountForPlayer(topDeckCountPlayer)
+  const bottomDeckCount = getProjectedDeckCountForPlayer(bottomDeckCountPlayer)
+  const pendingResolutionOverlay = Boolean(
+    state.lastLaneResolution && state.lastLaneResolution.timestamp > lastResolutionTimestampRef.current,
+  )
+  const endTurnDisabled =
+    !canEndTurn(state) ||
+    !isLocalPlayerTurn ||
+    state.phase !== 'Main' ||
+    aiLockActive ||
+    pendingResolutionOverlay ||
+    !!resolutionAnimation ||
+    isResolutionShowingRef.current ||
+    laneResolveEndTurnCooldown ||
+    abilityEndTurnCooldown ||
+    !!boardSelectionMode ||
+    !!minionMenuMode ||
+    state.pendingEffectChoices.length > 0
 
   return (
     <div 
@@ -2366,14 +2949,44 @@ export function GameBoard() {
             <div className="resolution-lane-name">
               {resolutionAnimation.laneId.toUpperCase()} LANE
             </div>
-            <div className="resolution-totals">
-              <div className={`resolution-total opponent ${resolutionAnimation.winner === 2 ? 'winner' : resolutionAnimation.winner === 1 ? 'loser' : ''}`}>
+            <div className="resolution-hands">
+              <div className={`resolution-hand opponent ${resolutionAnimation.winner === 2 ? 'winner' : resolutionAnimation.winner === 1 ? 'loser' : ''}`}>
                 <span className="resolution-label">OPPONENT</span>
+                <div className="resolution-card-row">
+                  {resolutionAnimation.p2Cards.map((card, idx) => (
+                    <CardView key={`${card.id}-${idx}`} card={card} small ownerSuit={resolutionOpponentSuit} />
+                  ))}
+                </div>
+                <span className="resolution-hand-name">{resolutionAnimation.p2HandLabel}</span>
+                <div className="resolution-breakdown">
+                  <span>{resolutionAnimation.p2BaseDamage}</span>
+                  {resolutionAnimation.p2PokerBonus > 0 && (
+                    <>
+                      <span className="bonus-separator">|</span>
+                      <span>{resolutionAnimation.p2PokerBonus}</span>
+                    </>
+                  )}
+                </div>
                 <span className="resolution-value">{resolutionAnimation.p2Total}</span>
               </div>
               <div className="resolution-vs">VS</div>
-              <div className={`resolution-total player ${resolutionAnimation.winner === 1 ? 'winner' : resolutionAnimation.winner === 2 ? 'loser' : ''}`}>
+              <div className={`resolution-hand player ${resolutionAnimation.winner === 1 ? 'winner' : resolutionAnimation.winner === 2 ? 'loser' : ''}`}>
                 <span className="resolution-label">YOU</span>
+                <div className="resolution-card-row">
+                  {resolutionAnimation.p1Cards.map((card, idx) => (
+                    <CardView key={`${card.id}-${idx}`} card={card} small ownerSuit={resolutionPlayerSuit} />
+                  ))}
+                </div>
+                <span className="resolution-hand-name">{resolutionAnimation.p1HandLabel}</span>
+                <div className="resolution-breakdown">
+                  <span>{resolutionAnimation.p1BaseDamage}</span>
+                  {resolutionAnimation.p1PokerBonus > 0 && (
+                    <>
+                      <span className="bonus-separator">|</span>
+                      <span>{resolutionAnimation.p1PokerBonus}</span>
+                    </>
+                  )}
+                </div>
                 <span className="resolution-value">{resolutionAnimation.p1Total}</span>
               </div>
             </div>
@@ -2480,7 +3093,6 @@ export function GameBoard() {
           const opponentData = shouldFlipPerspective ? state.player1 : state.player2
           const opponentSuit = shouldFlipPerspective ? state.player1Suit : state.player2Suit
           const opponentPlayerNumber = shouldFlipPerspective ? 1 : 2
-          const opponentIsHumanControlled = state.gameMode !== 'vs-ai'
           const opponentDisplayHP = shouldFlipPerspective ? player1DisplayHP : player2DisplayHP
           const opponentTakingDamage = shouldFlipPerspective ? player1TakingDamage : player2TakingDamage
           const opponentHealing = shouldFlipPerspective ? player1Healing : player2Healing
@@ -2504,17 +3116,25 @@ export function GameBoard() {
               {/* Opponent avatar row: keep avatar perfectly centered */}
               <div className="hero-float opponent">
                 <div className="hero-slot-left">
-                  <MinionIcon suit={opponentSuit} isActive={opponentIsHumanControlled && opponentData.minionAvailable} />
-                  <HPDisplay hp={opponentDisplayHP} isPlayer={false} />
+                  <MinionIcon suit={opponentSuit} stackCount={opponentData.minionStacks} fxKey="opponent-minion" />
+                  {HPDisplay({ hp: opponentDisplayHP, isPlayer: false })}
                 </div>
                 <div className="hero-slot-center">
-                  <Avatar suit={opponentSuit} isPlayer={false} takingDamage={opponentTakingDamage} healing={opponentHealing} isTurnActive={state.currentPlayer === opponentPlayerNumber} />
+                  {Avatar({
+                    suit: opponentSuit,
+                    isPlayer: false,
+                    takingDamage: opponentTakingDamage,
+                    healing: opponentHealing,
+                    isTurnActive: state.currentPlayer === opponentPlayerNumber,
+                    supportAvailable: opponentPlayerNumber === 1 ? state.player1SupportAvailable : state.player2SupportAvailable,
+                    fxKey: 'opponent-avatar',
+                  })}
                 </div>
                 <div className="hero-slot-right">
                   <div className="support-relic-row">
-                    <RelicIcon suit={opponentSuit} relic="shield" isActive={opponentIsHumanControlled && opponentData.relicsAvailable.shield} />
-                    <RelicIcon suit={opponentSuit} relic="skull" isActive={opponentIsHumanControlled && opponentData.relicsAvailable.skull} />
-                    <RelicIcon suit={opponentSuit} relic="sword" isActive={opponentIsHumanControlled && opponentData.relicsAvailable.sword} />
+                    <RelicIcon suit={opponentSuit} relic="skull" stackCount={opponentData.relicStacks.skull} fxKey="opponent-skull" />
+                    <RelicIcon suit={opponentSuit} relic="shield" stackCount={opponentData.relicStacks.shield} fxKey="opponent-shield" />
+                    <RelicIcon suit={opponentSuit} relic="sword" stackCount={opponentData.relicStacks.sword} fxKey="opponent-sword" />
                   </div>
                 </div>
               </div>
@@ -2555,61 +3175,77 @@ export function GameBoard() {
             {/* The 3 Lanes - LEFT/CENTER */}
             <div className="lanes-container">
               {state.lanes.map(lane => (
-                <LaneView key={lane.id} lane={lane} />
+                <Fragment key={lane.id}>{LaneView({ lane })}</Fragment>
               ))}
             </div>
 
-              {/* Right column: all-lane community card, shared deck, end turn, cards played. */}
-              <div className="side-action-right">
+            {/* 4th column: shared deck rendered as a matching lane.
+                Top/bottom slots show the draw pile (card backs); the middle
+                slot holds the all-lane community card; the score-badge boxes
+                above/below show each side's projected remaining draw count. */}
+            <div className="lane-wrapper deck-lane-wrapper">
+              <div className="lane-total deck-total has-value">
+                <div className="lane-total-number"><span className="base-sum">{topDeckCount}</span></div>
+                <span className="hand-label" aria-hidden="true">&nbsp;</span>
+              </div>
+
+              <div className="lane deck-lane">
+                <div className="lane-cards-stack opponent">
+                  {DrawPile({ count: topDeckCount, glowClass: deckGlowClass, showEmptyOutline: topDeckCount === 0, hideCount: true })}
+                </div>
+
                 <div
-                  className="community-poker-slot all-lane-community-slot"
+                  className="community-poker-slot lane-community-slot"
                   data-slot-id="all_lane_community_poker_card"
                   aria-label="all_lane_community_poker_card"
                 >
                   {state.allLaneCommunityCard && (
-                    <CardView card={state.allLaneCommunityCard} small />
+                    <CardView card={state.allLaneCommunityCard} small communityCard />
                   )}
                 </div>
-                <DrawPile count={state.sharedDeck.length} glowClass={deckGlowClass} showEmptyOutline={sharedDeckEmpty} />
-              <button 
-                className="end-turn-btn"
-                onClick={handleEndTurn}
-                  disabled={!canEndTurn(state) || !isLocalPlayerTurn}
-              >
-                END<br/>TURN
-              </button>
-                <span className="cards-played">{state.cardsPlayedThisTurn}/3</span>
+
+                <div className="lane-cards-stack player">
+                  {DrawPile({ count: bottomDeckCount, glowClass: deckGlowClass, showEmptyOutline: bottomDeckCount === 0, hideCount: true })}
+                </div>
               </div>
+
+              <div className="lane-total deck-total has-value">
+                <div className="lane-total-number"><span className="base-sum">{bottomDeckCount}</span></div>
+                <span className="hand-label" aria-hidden="true">&nbsp;</span>
+              </div>
+            </div>
             </div>
           </div>
         )}
 
-        {/* Phase Banner - Below board, on player's side */}
+        {/* Phase Banner + turn controls - Below board, on player's side */}
         <div className="phase-row">
-          <div className="phase-banner" style={{ background: phaseColor, color: '#000' }}>
-            {state.phase === 'Main' && isLocalPlayerTurn && (
-              handsRemaining <= 2 && handsRemaining > 0
-                ? `${handsRemaining} HAND${handsRemaining > 1 ? 'S' : ''} REMAINING`
-                : state.gameMode === 'vs-player' ? (isPlayerTurn ? 'PLAYER 1 TURN' : 'PLAYER 2 TURN') : 
-                  state.gameMode === 'online' ? 'YOUR TURN' : 'YOUR TURN'
-            )}
-            {state.phase === 'Main' && !isLocalPlayerTurn && (
-              handsRemaining <= 2 && handsRemaining > 0
-                ? `${handsRemaining} HAND${handsRemaining > 1 ? 'S' : ''} REMAINING`
-                : state.gameMode === 'vs-player' ? (isPlayerTurn ? 'PLAYER 1 TURN' : 'PLAYER 2 TURN') :
-                  state.gameMode === 'online' ? 'OPPONENT TURN' : 'AI TURN'
-            )}
-            {state.phase === 'InitialFlip' && 'WAR FLIP'}
-            {state.phase === 'EndOfRoundResolving' && 'RESOLVING'}
-            {state.phase === 'SuddenDeath' && 'SUDDEN DEATH'}
-            {state.phase === 'Finished' && (
-              state.gameMode === 'vs-player' 
-                ? (state.winner === 1 ? 'PLAYER 1 WINS!' : 'PLAYER 2 WINS!')
-                : state.gameMode === 'online'
-                  ? (state.winner === state.localPlayer ? 'YOU WIN!' : 'YOU LOSE!')
-                  : (state.winner === 1 ? 'YOU WIN!' : 'YOU LOSE')
-            )}
-          </div>
+          {state.phase === 'Main' && (
+            <div className="turn-controls">
+              <button
+                className="end-turn-btn"
+                onClick={handleEndTurn}
+                disabled={endTurnDisabled}
+              >
+                END TURN
+              </button>
+              <span className="cards-played">{state.cardsPlayedThisTurn}/3</span>
+            </div>
+          )}
+          {state.phase !== 'Main' && (
+            <div className="phase-banner" style={{ background: phaseColor, color: '#000' }}>
+              {state.phase === 'InitialFlip' && 'WAR FLIP'}
+              {state.phase === 'EndOfRoundResolving' && 'RESOLVING'}
+              {state.phase === 'SuddenDeath' && 'SUDDEN DEATH'}
+              {state.phase === 'Finished' && (
+                state.gameMode === 'vs-player' 
+                  ? (state.winner === 1 ? 'PLAYER 1 WINS!' : 'PLAYER 2 WINS!')
+                  : state.gameMode === 'online'
+                    ? (state.winner === state.localPlayer ? 'YOU WIN!' : 'YOU LOSE!')
+                    : (state.winner === 1 ? 'YOU WIN!' : 'YOU LOSE')
+              )}
+            </div>
+          )}
         </div>
 
         {/* Hint text */}
@@ -2643,37 +3279,51 @@ export function GameBoard() {
                 <div className="hero-slot-left">
                   <MinionIcon
                     suit={localSuit}
-                    isActive={localData.minionAvailable}
+                    stackCount={localData.minionStacks}
                     canActivate={canUseMinion()}
                     onClick={handleMinionClick}
+                    fxKey="player-minion"
                   />
-                  <HPDisplay hp={localDisplayHP} isPlayer={true} />
+                  {HPDisplay({ hp: localDisplayHP, isPlayer: true })}
                 </div>
                 <div className="hero-slot-center">
-                  <Avatar suit={localSuit} isPlayer={true} takingDamage={localTakingDamage} healing={localHealing} isTurnActive={state.currentPlayer === localPlayerNumber} />
+                  {Avatar({
+                    suit: localSuit,
+                    isPlayer: true,
+                    takingDamage: localTakingDamage,
+                    healing: localHealing,
+                    isTurnActive: state.currentPlayer === localPlayerNumber,
+                    supportAvailable: localPlayerNumber === 1 ? state.player1SupportAvailable : state.player2SupportAvailable,
+                    canUseSupport: canUseAvatarSupport(),
+                    onSupportClick: handleAvatarSupportClick,
+                    fxKey: 'player-avatar',
+                  })}
                 </div>
                 <div className="hero-slot-right">
                   <div className="support-relic-row">
                     <RelicIcon
                       suit={localSuit}
-                      relic="shield"
-                      isActive={localData.relicsAvailable.shield}
-                      canActivate={canUseRelic('shield')}
-                      onClick={() => handleRelicClick('shield')}
+                      relic="skull"
+                      stackCount={localData.relicStacks.skull}
+                      canActivate={canUseRelic('skull')}
+                      onClick={() => handleRelicClick('skull')}
+                      fxKey="player-skull"
                     />
                     <RelicIcon
                       suit={localSuit}
-                      relic="skull"
-                      isActive={localData.relicsAvailable.skull}
-                      canActivate={canUseRelic('skull')}
-                      onClick={() => handleRelicClick('skull')}
+                      relic="shield"
+                      stackCount={localData.relicStacks.shield}
+                      canActivate={canUseRelic('shield')}
+                      onClick={() => handleRelicClick('shield')}
+                      fxKey="player-shield"
                     />
                     <RelicIcon
                       suit={localSuit}
                       relic="sword"
-                      isActive={localData.relicsAvailable.sword}
+                      stackCount={localData.relicStacks.sword}
                       canActivate={canUseRelic('sword')}
                       onClick={() => handleRelicClick('sword')}
+                      fxKey="player-sword"
                     />
                   </div>
                 </div>

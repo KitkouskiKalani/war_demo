@@ -6,7 +6,7 @@
 import { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import type { Card, StandardSuit } from '../game/types'
-import { getCardTooltipData, getJokerOnBoardTooltip } from '../game/suitEffects'
+import { getCardTooltipData, getJokerOnBoardTooltip, getCommunityCardTooltip } from '../game/suitEffects'
 
 // Global event to dismiss all tooltips when a new one opens
 const TOOLTIP_DISMISS_EVENT = 'card-tooltip-dismiss'
@@ -24,6 +24,7 @@ interface CardViewProps {
   // Lane context for Joker tooltips (when card is on board)
   laneCards?: Card[]  // All cards in the lane (for resolving Joker)
   cardIndexInLane?: number  // This card's index in the lane
+  communityCard?: boolean  // Shared community poker card (owner-less; shows community tooltip)
   // Drag and drop props
   draggable?: boolean
   isDragging?: boolean
@@ -115,6 +116,7 @@ export function CardView({
   ownerSuit,
   laneCards,
   cardIndexInLane,
+  communityCard = false,
   draggable = false,
   isDragging = false,
   onDragStart,
@@ -171,7 +173,14 @@ export function CardView({
   // Generate structured tooltip data for face-up cards with an owner suit
   // For Jokers on the board, show what they're mimicking
   const tooltipData = (() => {
-    if (faceDown || !ownerSuit) return null
+    if (faceDown) return null
+
+    // Shared community poker cards have no owner suit; show a community tooltip.
+    if (communityCard) {
+      return getCommunityCardTooltip(card)
+    }
+
+    if (!ownerSuit) return null
     
     // Check if this is a Joker on the board (has lane context)
     // Jokers don't resolve until lane resolution - show generic tooltip
@@ -281,9 +290,22 @@ export function CardView({
       return
     }
     updateTooltipRect()
+    // Hand cards animate upward on hover (transform lift). Track the card's
+    // position every frame for the duration of that transition so the tooltip
+    // stays glued above the card instead of being covered by the rising card.
+    let rafId = 0
+    const start = performance.now()
+    const track = (now: number) => {
+      updateTooltipRect()
+      if (now - start < 280) {
+        rafId = requestAnimationFrame(track)
+      }
+    }
+    rafId = requestAnimationFrame(track)
     window.addEventListener('scroll', updateTooltipRect, true)
     window.addEventListener('resize', updateTooltipRect)
     return () => {
+      cancelAnimationFrame(rafId)
       window.removeEventListener('scroll', updateTooltipRect, true)
       window.removeEventListener('resize', updateTooltipRect)
     }
@@ -294,6 +316,7 @@ export function CardView({
     <div 
       ref={cardRef}
       className={classes} 
+      data-card-id={card.id}
       onClick={handleClick}
       draggable={draggable && !disabled}
       onDragStart={handleDragStart}

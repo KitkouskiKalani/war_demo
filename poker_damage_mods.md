@@ -20,7 +20,7 @@ A player's 5-card pool is:
 
 "Utilized" cards are only the cards that actually form the winning hand, **not** every card in the pool.
 
-- High Card uses **1** card: the single highest card **from the player's own 3 played cards only**. Community cards are *not* eligible for the High Card fallback (you can't borrow a High Card value from a card you didn't play). Jokers the player played still count (intrinsic value 15).
+- High Card uses **1** card: the single highest card **from the player's own 3 played cards only**. Community cards are *not* eligible for the High Card fallback (you can't borrow a High Card value from a card you didn't play). Jokers the player played still count, capped at Ace value (12).
 - Pair uses **2** cards.
 - Two Pair uses **4** cards.
 - Three of a Kind uses **3** cards.
@@ -39,10 +39,10 @@ If two hand types tie on total damage the evaluator prefers the higher-tier hand
 |-----:|------:|
 | 2-10 | face value |
 | J    | 11 |
-| Q    | 12 |
-| K    | 13 |
-| A    | 14 (always 14 for damage, even when used as the low end of an A-2-3-4-5 straight) |
-| Joker | 15 when not mimicking anything (high-card / unused position); otherwise takes the value of the rank it mimics |
+| Q    | 11 |
+| K    | 11 |
+| A    | 12 (always 12 for damage, even when used as the low end of an A-2-3-4-5 straight) |
+| Joker | 12 when not mimicking anything (high-card / unused position); otherwise takes the damage value of the rank it mimics, capped at Ace value |
 
 ---
 
@@ -51,9 +51,9 @@ If two hand types tie on total damage the evaluator prefers the higher-tier hand
 Jokers are **fully wild**: they can stand in for any rank AND any suit.
 
 - In sets (pair, three-of-a-kind, four-of-a-kind, five-of-a-kind, full house, two pair) a joker mimics the target rank and contributes that rank's value.
-- In straights / straight flushes a joker fills the missing rank slot and contributes that slot's rank value (A in an ace-low straight still contributes 14).
-- In a pure flush (no straight) a joker acts as an **Ace (value 14)** so a flush player is rewarded for having a joker.
-- In a high-card hand a joker is worth its intrinsic **15**.
+- In straights / straight flushes a joker fills the missing rank slot and contributes that slot's damage value (A in an ace-low straight still contributes 12).
+- In a pure flush (no straight) a joker acts as an **Ace (value 12)** so a flush player is rewarded for having a joker.
+- In a high-card hand a joker is worth **12**, tied with Ace and never above Ace.
 
 Five of a Kind is **only possible with a joker** (standard decks have 4 suits per rank).
 

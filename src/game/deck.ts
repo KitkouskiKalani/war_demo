@@ -17,10 +17,21 @@ export function rankValue(rank: Rank): number {
   if (typeof rank === 'number') return rank;
   switch (rank) {
     case 'J': return 11;
+    case 'Q': return 11;
+    case 'K': return 11;
+    case 'A': return 12;
+    case 'JOKER': return 12;
+  }
+}
+
+export function rankOrderValue(rank: Rank): number {
+  if (typeof rank === 'number') return rank;
+  switch (rank) {
+    case 'J': return 11;
     case 'Q': return 12;
     case 'K': return 13;
     case 'A': return 14;
-    case 'JOKER': return 15;
+    case 'JOKER': return 14;
   }
 }
 

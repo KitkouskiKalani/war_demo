@@ -5,13 +5,12 @@
 import type { Card, CurrentPlayer, FlipResult, GameMode, GameState, Lane, LaneId, OnlineConnectionStatus, PlayerState, Rank, RelicType, StandardSuit, TriggeredEffect } from './types';
 import { cardValue, createDeck, findCardById, removeCardById, shuffle } from './deck';
 import { evaluateBestHand, type BestHand } from './poker';
-import { applyDamage, applyHeartsStartingRegen, clearMinionEffectsFromCards, createEmptyLaneRelicEffects, createEmptyLanes, drawFromSharedDeck, findLane, initializeNewGame, startNewRound, updateLane } from './state';
+import { applyDamage, applyHeartsStartingRegen, clearMinionEffectsFromCards, createEmptyLaneRelicEffects, createEmptyLanes, drawFromPlayerDeck, findLane, initializeNewGame, startNewRound, updateLane } from './state';
 import { 
   isCardActiveForEffects, 
   getEffectDefinition, 
   shouldEffectTrigger, 
   getEffectStrength,
-  DAMAGE_SUITS as SUIT_DAMAGE_SUITS,
   SUIT_EFFECTS_ENABLED
 } from './suitEffects';
 import {
@@ -44,7 +43,7 @@ export type GameAction =
   | { type: 'INITIAL_FLIP_STEP' }
   | { type: 'CONTINUE_FROM_FLIP' }
   | { type: 'PLAY_CARD_TO_LANE'; cardId: string; laneId: LaneId; fromNetwork?: boolean }
-  | { type: 'END_TURN'; fromNetwork?: boolean }  // fromNetwork skips validation for remote actions
+  | { type: 'END_TURN'; player?: CurrentPlayer; fromNetwork?: boolean }  // fromNetwork skips validation for remote actions
   | { type: 'RESOLVE_LANE'; laneId: LaneId }
   // v7 Cycling Lane Flow: end-of-round flow is split into two UI-driven steps
   // so each lane's resolution animation can play sequentially before the next
@@ -56,7 +55,11 @@ export type GameAction =
   | { type: 'USE_RELIC_SHIELD'; player: CurrentPlayer; laneId: LaneId }
   | { type: 'USE_RELIC_SWORD'; player: CurrentPlayer; laneId: LaneId }
   | { type: 'USE_RELIC_SKULL'; player: CurrentPlayer; cardId: string; fromLane: LaneId; toLane: LaneId }
+  | { type: 'USE_RELIC_SPADES_SKULL_RANDOMIZE'; player: CurrentPlayer; cardId: string; replacement: Card }
+  | { type: 'USE_RELIC_HEARTS_SKULL_FROM_DISCARD'; player: CurrentPlayer; cardId: string; sourceDiscardCardId: string }
   | { type: 'USE_MINION_RANDOM_BUFF'; player: CurrentPlayer; cardId: string }
+  | { type: 'USE_MINION_SPADES_REROLL'; player: CurrentPlayer; cardIds: string[]; newCards: Card[]; playerDeck: Card[] }
+  | { type: 'USE_MINION_HEARTS_RELIC_STACKS'; player: CurrentPlayer; relic: 'sword' | 'shield' }
   | { type: 'USE_MINION_CLUBS_CHANGE_SUIT'; player: CurrentPlayer; cardId: string; suit: StandardSuit }
   | { type: 'USE_MINION_DIAMONDS_RANK_UP'; player: CurrentPlayer; cardId: string }
   // Online multiplayer actions
@@ -94,6 +97,7 @@ const EMPTY_RELIC_LANE_EFFECT = {
   player1: { shielded: false, swordBonus: false },
   player2: { shielded: false, swordBonus: false },
 };
+const ABILITY_STACKS_TO_ACTIVATE = 3;
 
 function isLaneLockedByMissingCommunity(state: GameState, laneId: LaneId): boolean {
   return state.laneCommunityCards[laneId] === null;
@@ -107,35 +111,81 @@ function playerKey(player: CurrentPlayer): 'player1' | 'player2' {
   return player === 1 ? 'player1' : 'player2';
 }
 
-function deactivateRelic(state: GameState, player: CurrentPlayer, relic: RelicType): GameState {
+function isAbilityActive(stacks: number): boolean {
+  return stacks >= ABILITY_STACKS_TO_ACTIVATE;
+}
+
+function capAbilityStacks(stacks: number): number {
+  return Math.min(ABILITY_STACKS_TO_ACTIVATE, Math.max(0, stacks));
+}
+
+function withRelicStack(state: GameState, player: CurrentPlayer, relic: RelicType, stacks: number): GameState {
   const key = playerKey(player);
+  const cappedStacks = capAbilityStacks(stacks);
   return {
     ...state,
     [key]: {
       ...state[key],
+      relicStacks: {
+        ...state[key].relicStacks,
+        [relic]: cappedStacks,
+      },
       relicsAvailable: {
         ...state[key].relicsAvailable,
-        [relic]: false,
+        [relic]: isAbilityActive(cappedStacks),
       },
     },
   };
 }
 
-function deactivateMinion(state: GameState, player: CurrentPlayer): GameState {
+function incrementRelicStack(state: GameState, player: CurrentPlayer, relic: RelicType): GameState {
   const key = playerKey(player);
+  return withRelicStack(state, player, relic, state[key].relicStacks[relic] + 1);
+}
+
+function withMinionStacks(state: GameState, player: CurrentPlayer, stacks: number): GameState {
+  const key = playerKey(player);
+  const cappedStacks = capAbilityStacks(stacks);
   return {
     ...state,
     [key]: {
       ...state[key],
-      minionAvailable: false,
+      minionStacks: cappedStacks,
+      minionAvailable: isAbilityActive(cappedStacks),
     },
   };
+}
+
+function incrementMinionStack(state: GameState, player: CurrentPlayer): GameState {
+  const key = playerKey(player);
+  return withMinionStacks(state, player, state[key].minionStacks + 1);
+}
+
+function deactivateRelic(state: GameState, player: CurrentPlayer, relic: RelicType): GameState {
+  return withRelicStack(state, player, relic, 0);
+}
+
+function deactivateMinion(state: GameState, player: CurrentPlayer): GameState {
+  return withMinionStacks(state, player, 0);
 }
 
 function canUseMinion(state: GameState, player: CurrentPlayer): boolean {
   if (state.phase !== 'Main') return false;
   if (state.currentPlayer !== player) return false;
-  return state[playerKey(player)].minionAvailable;
+  return isAbilityActive(state[playerKey(player)].minionStacks);
+}
+
+function canUseSpadesMinionReroll(state: GameState, player: CurrentPlayer): boolean {
+  if (state.phase !== 'Main') return false;
+  if (state.currentPlayer === player) return false;
+  const playerSuit = player === 1 ? state.player1Suit : state.player2Suit;
+  if (playerSuit !== 'spades') return false;
+  const playerState = state[playerKey(player)];
+  if (!isAbilityActive(playerState.minionStacks)) return false;
+  const playerDeck = player === 1 ? state.player1Deck : state.player2Deck;
+  if (playerDeck.length === 0) return false;
+  if (playerState.lastEndTurnDrawCardIds.length !== CARDS_TO_DRAW_END_TURN) return false;
+  return playerState.lastEndTurnDrawCardIds.every((cardId) => playerState.hand.some((card) => card.id === cardId));
 }
 
 function updatePlayerHandCard(
@@ -175,7 +225,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     case 'INITIAL_FLIP_STEP': return handleInitialFlipStep(state);
     case 'CONTINUE_FROM_FLIP': return handleContinueFromFlip(state);
     case 'PLAY_CARD_TO_LANE': return handlePlayCardToLane(state, action.cardId, action.laneId, action.fromNetwork);
-    case 'END_TURN': return handleEndTurn(state, action.fromNetwork);
+    case 'END_TURN': return handleEndTurn(state, action.fromNetwork, action.player);
     case 'RESOLVE_LANE': return resolveLane(state, action.laneId);
     case 'RESOLVE_NEXT_END_OF_ROUND_LANE': return handleResolveNextEndOfRoundLane(state);
     case 'FINALIZE_ROUND_END': return handleFinalizeRoundEnd(state);
@@ -184,7 +234,11 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     case 'USE_RELIC_SHIELD': return handleUseRelicShield(state, action.player, action.laneId);
     case 'USE_RELIC_SWORD': return handleUseRelicSword(state, action.player, action.laneId);
     case 'USE_RELIC_SKULL': return handleUseRelicSkull(state, action.player, action.cardId, action.fromLane, action.toLane);
+    case 'USE_RELIC_SPADES_SKULL_RANDOMIZE': return handleUseRelicSpadesSkullRandomize(state, action.player, action.cardId, action.replacement);
+    case 'USE_RELIC_HEARTS_SKULL_FROM_DISCARD': return handleUseRelicHeartsSkullFromDiscard(state, action.player, action.cardId, action.sourceDiscardCardId);
     case 'USE_MINION_RANDOM_BUFF': return handleUseMinionRandomBuff(state, action.player, action.cardId);
+    case 'USE_MINION_SPADES_REROLL': return handleUseMinionSpadesReroll(state, action.player, action.cardIds, action.newCards, action.playerDeck);
+    case 'USE_MINION_HEARTS_RELIC_STACKS': return handleUseMinionHeartsRelicStacks(state, action.player, action.relic);
     case 'USE_MINION_CLUBS_CHANGE_SUIT': return handleUseMinionClubsChangeSuit(state, action.player, action.cardId, action.suit);
     case 'USE_MINION_DIAMONDS_RANK_UP': return handleUseMinionDiamondsRankUp(state, action.player, action.cardId);
     // Online multiplayer
@@ -368,8 +422,11 @@ function handleInitialFlipStep(state: GameState): GameState {
 
   // v4 Shared deck War Flip: alternate top cards (P1 first, P2 second) from the shared deck.
   // On ties, draw two more. Flipped cards are tracked so handleContinueFromFlip can
-  // use the winner as the all-lane community card and recycle the rest.
-  let workingDeck = [...state.sharedDeck];
+  // discard the winner for the round and recycle the rest.
+  // v8 Split Deck: the War Flip draws from the neutral community pool so it
+  // never disturbs the two equal personal decks. Flipped cards are returned to
+  // the community pool in handleContinueFromFlip.
+  let workingDeck = [...state.communityDeck];
   let player1Card: Card | null = null;
   let player2Card: Card | null = null;
   let winner: CurrentPlayer | null = null;
@@ -385,7 +442,7 @@ function handleInitialFlipStep(state: GameState): GameState {
     player1AllCards.push(player1Card);
     player2AllCards.push(player2Card);
 
-    // Get card values - Joker is highest (15), Ace is 14, etc.
+    // Get card values.
     const value1 = cardValue(player1Card);
     const value2 = cardValue(player2Card);
 
@@ -411,11 +468,11 @@ function handleInitialFlipStep(state: GameState): GameState {
     damage: 0, // War flip no longer deals damage, only decides who goes first
   };
 
-  // Remove flipped cards from the shared deck; they'll return to the bottom on continue.
+  // Remove flipped cards from the community pool; they'll return to the bottom on continue.
   return {
     ...state,
     phase: 'InitialFlipResult',
-    sharedDeck: workingDeck,
+    communityDeck: workingDeck,
     flipResult,
   };
 }
@@ -427,39 +484,53 @@ function handleContinueFromFlip(state: GameState): GameState {
 
   const winningFlipCard = winner === 1 ? state.flipResult.player1Card : state.flipResult.player2Card;
 
-  // Put non-winning flipped cards at the BOTTOM of the shared deck (interleaved
-  // in flip order). The winning flip card becomes the all-lane community card
-  // for this round, so an extra card is not drawn from the shared deck.
+  // Put all flipped cards back at the BOTTOM of the shared deck. The all-lane
+  // community card is a round-only duplicate of the winning flip card, so the
+  // real winning card can still be drawn later this round.
   const recycledFlipCards: Card[] = [];
   const maxLen = Math.max(player1AllCards.length, player2AllCards.length);
   for (let i = 0; i < maxLen; i++) {
-    if (player1AllCards[i] && player1AllCards[i].id !== winningFlipCard.id) {
+    if (player1AllCards[i]) {
       recycledFlipCards.push(player1AllCards[i]);
     }
-    if (player2AllCards[i] && player2AllCards[i].id !== winningFlipCard.id) {
+    if (player2AllCards[i]) {
       recycledFlipCards.push(player2AllCards[i]);
     }
   }
-  const deckWithFlippedCards = [...state.sharedDeck, ...recycledFlipCards];
+  const communityWithFlippedCards = [...state.communityDeck, ...recycledFlipCards];
+
+  const winningFlipCommunityCard: Card = {
+    ...winningFlipCard,
+    id: `${winningFlipCard.id}-war-flip-community-r${state.roundNumber}`,
+  };
 
   // Set field control to winner's suit
   const fieldControlSuit = winner === 1 ? state.player1Suit : state.player2Suit;
 
-  // v5 Round Flow: top up each hand to INITIAL_HAND_SIZE (hands carry across rounds)
-  let drawState: GameState = { ...state, sharedDeck: deckWithFlippedCards };
+  // v8 Split Deck: return the flipped cards to the community pool, then top up
+  // each hand to INITIAL_HAND_SIZE from that player's OWN deck (hands carry
+  // across rounds). Personal decks are equal, so both players draw evenly.
+  let drawState: GameState = {
+    ...state,
+    communityDeck: communityWithFlippedCards,
+  };
   const p1Need = Math.max(0, INITIAL_HAND_SIZE - drawState.player1.hand.length);
   const p2Need = Math.max(0, INITIAL_HAND_SIZE - drawState.player2.hand.length);
-  drawState = drawFromSharedDeck(drawState, 1, p1Need);
-  drawState = drawFromSharedDeck(drawState, 2, p2Need);
+  drawState = drawFromPlayerDeck(drawState, 1, p1Need);
+  drawState = drawFromPlayerDeck(drawState, 2, p2Need);
 
   // v5 Round Flow: deal face-up community cards into the three per-lane slots.
-  // The all-lane community card is the winning War Flip card.
-  drawState = dealCommunityCards(drawState, winningFlipCard);
+  // The all-lane slot is a duplicate of the winning War Flip card and does not
+  // consume a card from the deck.
+  drawState = dealCommunityCards(drawState, winningFlipCommunityCard);
 
   const continuedState: GameState = {
     ...drawState,
     phase: 'Main',
     currentPlayer: winner,
+    // The flip winner takes the first turn; remember it so the round only ends
+    // after the second player's matching turn (equal turns for both players).
+    roundStartingPlayer: winner,
     cardsPlayedThisTurn: 0,
     flipResult: null,
     fieldControlSuit,
@@ -471,13 +542,26 @@ function handleContinueFromFlip(state: GameState): GameState {
   return checkBothHandsEmpty(continuedState);
 }
 
+function relicStackForPlayedCard(card: Card, playerSuit: StandardSuit | null): RelicType | null {
+  if (!playerSuit || card.suit === playerSuit) return null;
+  if (typeof card.rank === 'number') {
+    if (card.rank >= 2 && card.rank <= 6) return 'sword';
+    if (card.rank >= 7 && card.rank <= 10) return 'shield';
+    return null;
+  }
+  if (card.rank === 'J') return 'shield';
+  if (card.rank === 'Q' || card.rank === 'K' || card.rank === 'A' || card.rank === 'JOKER') return 'skull';
+  return null;
+}
+
 /**
  * v5 Round Flow: pop up to 3 cards from the top of the shared deck and place
  * them in the per-lane community slots (left, middle, right). The all-lane
- * community slot is supplied by the winning War Flip card.
+ * community slot can be supplied by override (War Flip duplicate), otherwise
+ * it is drawn from the deck. No-ops gracefully if the shared deck is empty.
  */
-function dealCommunityCards(state: GameState, allLaneCommunityCard: Card | null): GameState {
-  const deck = [...state.sharedDeck];
+function dealCommunityCards(state: GameState, allLaneCommunityOverride?: Card): GameState {
+  const deck = [...state.communityDeck];
   const laneOrder: LaneId[] = ['left', 'middle', 'right'];
   const laneCommunityCards: Record<LaneId, Card | null> = {
     left: null,
@@ -488,9 +572,10 @@ function dealCommunityCards(state: GameState, allLaneCommunityCard: Card | null)
     if (deck.length === 0) break;
     laneCommunityCards[laneId] = deck.shift()!;
   }
+  const allLaneCommunityCard: Card | null = allLaneCommunityOverride ?? (deck.length > 0 ? deck.shift()! : null);
   return {
     ...state,
-    sharedDeck: deck,
+    communityDeck: deck,
     laneCommunityCards,
     allLaneCommunityCard,
   };
@@ -541,6 +626,15 @@ function handlePlayCardToLane(state: GameState, cardId: string, laneId: LaneId, 
     cardsPlayedThisTurn: state.cardsPlayedThisTurn + 1,
   };
 
+  const playerSuit = state.currentPlayer === 1 ? state.player1Suit : state.player2Suit;
+  const relicStack = relicStackForPlayedCard(card, playerSuit);
+  if (relicStack) {
+    newState = incrementRelicStack(newState, state.currentPlayer, relicStack);
+  }
+  if (playerSuit && card.suit === playerSuit) {
+    newState = incrementMinionStack(newState, state.currentPlayer);
+  }
+
   // v2 Ability System: on-play triggers (Aces, Face Cards, Hearts non-face).
   // All gated behind SUIT_EFFECTS_ENABLED - a future suit rework will
   // re-enable (or replace) these handlers.
@@ -566,8 +660,7 @@ function handlePlayCardToLane(state: GameState, cardId: string, laneId: LaneId, 
     }
 
     // v3 Hearts: 2-6 and 7-10 trigger ON PLAY (Hearts only)
-    const currentSuit = state.currentPlayer === 1 ? state.player1Suit : state.player2Suit;
-    if (currentSuit === 'hearts' && typeof card.rank === 'number' && card.rank >= 2 && card.rank <= 10) {
+    if (playerSuit === 'hearts' && typeof card.rank === 'number' && card.rank >= 2 && card.rank <= 10) {
       newState = handleHeartsNonFaceOnPlay(newState, card, state.currentPlayer);
     }
   }
@@ -621,13 +714,30 @@ function handlePlayCardToLane(state: GameState, cardId: string, laneId: LaneId, 
  * IMPORTANT: we do NOT call startNewRound here. Doing so would clobber
  * `lastLaneResolution` and skip every end-of-round animation.
  */
-function checkBothHandsEmpty(state: GameState): GameState {
+function checkBothHandsEmpty(state: GameState, justEndedPlayer?: CurrentPlayer): GameState {
   // Only fire while we're in normal Main play - never re-enter from
   // EndOfRoundResolving / Finished / etc.
   if (state.phase !== 'Main') return state;
   const bothHandsEmpty = state.player1.hand.length === 0 && state.player2.hand.length === 0;
   const allCommunityLanesLocked = areAllCommunityLanesLocked(state);
   if (!bothHandsEmpty && !allCommunityLanesLocked) return state;
+
+  // Equal-turns guard. When the round would end purely because both hands are
+  // empty (not because the board is community-locked), only end it at a turn
+  // boundary where both players have taken the same number of turns. Turns
+  // alternate starting with `roundStartingPlayer`, so "the non-starting player
+  // just ended their turn" is exactly the moment turn counts are equal. We only
+  // allow the empty-hands end from the end-of-turn path (which passes
+  // `justEndedPlayer`); mid-turn callers leave it undefined and never trigger
+  // it - the player presses End Turn instead, routing through the guarded path.
+  // (A community-locked board ends immediately regardless, since neither player
+  // can play anyway.)
+  if (bothHandsEmpty && !allCommunityLanesLocked) {
+    const endedByNonStarter = justEndedPlayer !== undefined && justEndedPlayer !== state.roundStartingPlayer;
+    if (!endedByNonStarter) {
+      return state; // wait for the second player's matching turn so turns stay equal
+    }
+  }
 
   // Build the queue of lanes that still have cards on the board. Empty lanes
   // are skipped entirely (no animation, no zero-damage resolve).
@@ -648,18 +758,29 @@ function checkBothHandsEmpty(state: GameState): GameState {
   };
 }
 
-function handleEndTurn(state: GameState, fromNetwork?: boolean): GameState {
-  // For local actions, require Main phase
-  // For network actions, be more lenient to handle desync
+function handleEndTurn(state: GameState, fromNetwork?: boolean, endingPlayer?: CurrentPlayer): GameState {
+  if (endingPlayer) {
+    const nextPlayer: CurrentPlayer = endingPlayer === 1 ? 2 : 1;
+    if (state.currentPlayer !== endingPlayer) {
+      if (fromNetwork && state.currentPlayer === nextPlayer) {
+        console.warn(`[Network] Ignoring duplicate END_TURN from player ${endingPlayer}; already advanced to player ${nextPlayer}`);
+        return state;
+      }
+      console.warn(`[EndTurn] Ignoring END_TURN from player ${endingPlayer}; current player is ${state.currentPlayer}`);
+      return state;
+    }
+  }
+
+  // Only process turn handoff from Main. Network END_TURN is player-specific
+  // and idempotent, so we should not force the phase back to Main here.
   if (!fromNetwork && state.phase !== 'Main') {
     console.log(`[EndTurn] Blocked - phase is ${state.phase}, not Main`);
     return state;
   }
   
-  // If from network but not in Main phase, log warning but still try to process
   if (fromNetwork && state.phase !== 'Main') {
-    console.warn(`[Network] END_TURN received but phase is ${state.phase} - forcing phase to Main`);
-    state = { ...state, phase: 'Main' };
+    console.warn(`[Network] Ignoring END_TURN received during ${state.phase}`);
+    return state;
   }
   
   const currentPlayer = state.currentPlayer;
@@ -680,15 +801,27 @@ function handleEndTurn(state: GameState, fromNetwork?: boolean): GameState {
       return playerSide.cards.length < MAX_CARDS_PER_LANE;
     });
     
-    if (!played3Cards && !(playedAtLeast1 && handIsEmpty) && hasPlayableLane) {
+    // You can always end your turn if your hand is empty (nothing to play).
+    // Otherwise you must have played your full quota (or have no legal lane).
+    void playedAtLeast1;
+    if (!played3Cards && !handIsEmpty && hasPlayableLane) {
       return state; // Can't end turn yet
     }
   } else {
     console.log(`[Network] Processing END_TURN from network - currentPlayer was ${currentPlayer}, cardsPlayed was ${state.cardsPlayedThisTurn}, skipping validation`);
   }
 
-  // END OF TURN: Draw up to 3 cards for the current player from the shared deck.
-  let drawState: GameState = drawFromSharedDeck(state, currentPlayer, CARDS_TO_DRAW_END_TURN);
+  // END OF TURN: Draw up to 3 cards for the current player from their OWN deck.
+  const currentPlayerDeck = currentPlayer === 1 ? state.player1Deck : state.player2Deck;
+  const endTurnDrawnCards = currentPlayerDeck.slice(0, Math.min(CARDS_TO_DRAW_END_TURN, currentPlayerDeck.length));
+  let drawState: GameState = drawFromPlayerDeck(state, currentPlayer, CARDS_TO_DRAW_END_TURN);
+  drawState = {
+    ...drawState,
+    [playerKey(currentPlayer)]: {
+      ...drawState[playerKey(currentPlayer)],
+      lastEndTurnDrawCardIds: endTurnDrawnCards.map((card) => card.id),
+    },
+  };
 
   // Switch to next player
   const nextPlayer: CurrentPlayer = currentPlayer === 1 ? 2 : 1;
@@ -696,10 +829,6 @@ function handleEndTurn(state: GameState, fromNetwork?: boolean): GameState {
 
   let newState: GameState = {
     ...drawState,
-    [playerKey(nextPlayer)]: {
-      ...drawState[playerKey(nextPlayer)],
-      minionAvailable: true,
-    },
     currentPlayer: nextPlayer,
     cardsPlayedThisTurn: 0,
   };
@@ -727,7 +856,7 @@ function handleEndTurn(state: GameState, fromNetwork?: boolean): GameState {
   // both players with empty hands - typically when the shared deck has run
   // dry. In that case we kick off the end-of-round animation flow right here
   // instead of waiting for a play that will never happen.
-  newState = checkBothHandsEmpty(newState);
+  newState = checkBothHandsEmpty(newState, currentPlayer);
   if (newState.phase === 'EndOfRoundResolving') {
     return newState;
   }
@@ -746,7 +875,7 @@ function handleEndTurn(state: GameState, fromNetwork?: boolean): GameState {
 function canUseRelic(state: GameState, player: CurrentPlayer, relic: RelicType): boolean {
   if (state.phase !== 'Main') return false;
   if (state.currentPlayer !== player) return false;
-  return state[playerKey(player)].relicsAvailable[relic];
+  return isAbilityActive(state[playerKey(player)].relicStacks[relic]);
 }
 
 function handleUseRelicShield(state: GameState, player: CurrentPlayer, laneId: LaneId): GameState {
@@ -853,6 +982,44 @@ function handleUseRelicSkull(
   return checkBothHandsEmpty(newState);
 }
 
+function handleUseRelicSpadesSkullRandomize(
+  state: GameState,
+  player: CurrentPlayer,
+  cardId: string,
+  replacement: Card,
+): GameState {
+  if (!canUseRelic(state, player, 'skull')) return state;
+  const playerSuit = player === 1 ? state.player1Suit : state.player2Suit;
+  if (playerSuit !== 'spades') return state;
+  const playerState = state[playerKey(player)];
+  if (!playerState.hand.some((card) => card.id === cardId)) return state;
+
+  const updatedState = updatePlayerHandCard(state, player, cardId, () => replacement);
+  return deactivateRelic(updatedState, player, 'skull');
+}
+
+function handleUseRelicHeartsSkullFromDiscard(
+  state: GameState,
+  player: CurrentPlayer,
+  cardId: string,
+  sourceDiscardCardId: string,
+): GameState {
+  if (!canUseRelic(state, player, 'skull')) return state;
+  const playerSuit = player === 1 ? state.player1Suit : state.player2Suit;
+  if (playerSuit !== 'hearts') return state;
+  const playerState = state[playerKey(player)];
+  if (!playerState.hand.some((card) => card.id === cardId)) return state;
+  const discardCard = state.outOfPlayPile.find((card) => card.id === sourceDiscardCardId);
+  if (!discardCard) return state;
+
+  const updatedState = updatePlayerHandCard(state, player, cardId, (handCard) => ({
+    ...handCard,
+    suit: discardCard.suit,
+    rank: discardCard.rank,
+  }));
+  return deactivateRelic(updatedState, player, 'skull');
+}
+
 function handleUseMinionRandomBuff(state: GameState, player: CurrentPlayer, cardId: string): GameState {
   if (!canUseMinion(state, player)) return state;
   const playerSuit = player === 1 ? state.player1Suit : state.player2Suit;
@@ -873,6 +1040,51 @@ function handleUseMinionRandomBuff(state: GameState, player: CurrentPlayer, card
     })),
     player,
   );
+}
+
+function handleUseMinionSpadesReroll(
+  state: GameState,
+  player: CurrentPlayer,
+  cardIds: string[],
+  newCards: Card[],
+  playerDeck: Card[],
+): GameState {
+  if (!canUseSpadesMinionReroll(state, player)) return state;
+  if (cardIds.length !== CARDS_TO_DRAW_END_TURN || newCards.length !== CARDS_TO_DRAW_END_TURN) return state;
+
+  const key = playerKey(player);
+  const requiredIds = state[key].lastEndTurnDrawCardIds;
+  const matchesLastDraw = requiredIds.every((cardId) => cardIds.includes(cardId)) &&
+    cardIds.every((cardId) => requiredIds.includes(cardId));
+  if (!matchesLastDraw) return state;
+
+  const remainingHand = state[key].hand.filter((card) => !cardIds.includes(card.id));
+  // The reroll only touches the acting player's OWN deck, so the split stays even.
+  const deckKey = player === 1 ? 'player1Deck' : 'player2Deck';
+  const rerolledState = {
+    ...state,
+    [deckKey]: playerDeck,
+    [key]: {
+      ...state[key],
+      hand: [...remainingHand, ...newCards],
+      lastEndTurnDrawCardIds: newCards.map((card) => card.id),
+    },
+  };
+
+  return deactivateMinion(rerolledState, player);
+}
+
+function handleUseMinionHeartsRelicStacks(
+  state: GameState,
+  player: CurrentPlayer,
+  relic: 'sword' | 'shield',
+): GameState {
+  if (!canUseMinion(state, player)) return state;
+  const playerSuit = player === 1 ? state.player1Suit : state.player2Suit;
+  if (playerSuit !== 'hearts') return state;
+  const key = playerKey(player);
+  const stackedState = withRelicStack(state, player, relic, state[key].relicStacks[relic] + 2);
+  return deactivateMinion(stackedState, player);
 }
 
 function handleUseMinionClubsChangeSuit(state: GameState, player: CurrentPlayer, cardId: string, suit: StandardSuit): GameState {
@@ -1366,12 +1578,14 @@ function resolveLane(state: GameState, laneId: LaneId): GameState {
   const clearedLane: Lane = { ...lane, player1: { cards: [] }, player2: { cards: [] } };
 
   // Draw the replacement per-lane community card right now so the lane is
-  // immediately playable again with its new community card visible.
-  let nextSharedDeck = newState.sharedDeck;
+  // immediately playable again with its new community card visible. v8 Split
+  // Deck: community cards come from the neutral community pool, never from a
+  // player's deck, so refills don't affect the even player split.
+  let nextCommunityDeck = newState.communityDeck;
   let replacementCommunityCard: Card | null = null;
-  if (nextSharedDeck.length > 0) {
-    replacementCommunityCard = nextSharedDeck[0];
-    nextSharedDeck = nextSharedDeck.slice(1);
+  if (nextCommunityDeck.length > 0) {
+    replacementCommunityCard = nextCommunityDeck[0];
+    nextCommunityDeck = nextCommunityDeck.slice(1);
   }
 
   // Create resolution result for animation
@@ -1390,13 +1604,19 @@ function resolveLane(state: GameState, laneId: LaneId): GameState {
     wasNeutralized,
     player1HandType: p1Hand.type,
     player2HandType: p2Hand.type,
+    player1Cards: lane.player1.cards,
+    player2Cards: lane.player2.cards,
+    player1BaseDamage: p1BaseSum,
+    player2BaseDamage: p2BaseSum,
+    player1PokerBonus: p1PokerBonus,
+    player2PokerBonus: p2PokerBonus,
   };
 
   // Reset overkill tracking at end of resolution
   return {
     ...newState,
     lanes: updateLane(newState.lanes, clearedLane),
-    sharedDeck: nextSharedDeck,
+    communityDeck: nextCommunityDeck,
     outOfPlayPile: newOutOfPlayPile,
     laneCommunityCards: { ...newState.laneCommunityCards, [laneId]: replacementCommunityCard },
     laneRelicEffects: {
@@ -1415,7 +1635,7 @@ function resolveLane(state: GameState, laneId: LaneId): GameState {
   };
 }
 
-const BASE_SUPPORT_ABILITY_AMOUNT = 5;
+const BASE_SUPPORT_ABILITY_AMOUNT = 3;
 
 function handleUseSupport(state: GameState, player: CurrentPlayer): GameState {
   // Can only use during Main phase
@@ -1425,29 +1645,16 @@ function handleUseSupport(state: GameState, player: CurrentPlayer): GameState {
   const supportAvailable = player === 1 ? state.player1SupportAvailable : state.player2SupportAvailable;
   if (!supportAvailable) return state;
   
-  const playerSuit = player === 1 ? state.player1Suit : state.player2Suit;
-  if (!playerSuit) return state;
-  
-  // Support amount is fixed at base value (5) - not affected by chargePower
+  // Support amount is fixed and always heals the user.
   const supportAmount = BASE_SUPPORT_ABILITY_AMOUNT;
   
   let player1 = { ...state.player1 };
   let player2 = { ...state.player2 };
   
-  if (SUIT_DAMAGE_SUITS.includes(playerSuit)) {
-    // Damage suits: Deal damage to opponent
-    if (player === 1) {
-      player2 = applyDamage(player2, supportAmount);
-    } else {
-      player1 = applyDamage(player1, supportAmount);
-    }
+  if (player === 1) {
+    player1 = { ...player1, hp: player1.hp + supportAmount };
   } else {
-    // Healing suits: Heal self (can go above max)
-    if (player === 1) {
-      player1 = { ...player1, hp: player1.hp + supportAmount };
-    } else {
-      player2 = { ...player2, hp: player2.hp + supportAmount };
-    }
+    player2 = { ...player2, hp: player2.hp + supportAmount };
   }
   
   // Mark support as used (no longer available) and reset lanes lost counter
@@ -1737,7 +1944,7 @@ function handleResolveNextEndOfRoundLane(state: GameState): GameState {
  * Called by the UI after every queued lane has finished its resolution
  * animation. Moves the all-lane community card (the only community card that
  * persists across mid-round resolves) into the outOfPlayPile and starts a new
- * round - which reshuffles outOfPlayPile back into sharedDeck, transitions to
+ * round - which pools + reshuffles everything into fresh split decks, transitions to
  * InitialFlip, and re-runs the War Flip + initial deal.
  *
  * Safety nets: if either player has died on the way here, return the
@@ -1760,11 +1967,12 @@ function handleFinalizeRoundEnd(state: GameState): GameState {
     return { ...state, phase: 'SuddenDeath' };
   }
 
-  // Move the all-lane community card to the outOfPlayPile so it's reshuffled
-  // back into the deck on the next round's startNewRound (which mixes
-  // outOfPlayPile + sharedDeck remnants together).
+  // Move a real all-lane community card to the outOfPlayPile so it's reshuffled
+  // back into the deck on the next round's startNewRound. War Flip community
+  // cards are round-only duplicates of a real card that was already returned
+  // to the deck, so they should disappear instead of creating an extra card.
   let newOutOfPlay = state.outOfPlayPile;
-  if (state.allLaneCommunityCard) {
+  if (state.allLaneCommunityCard && !state.allLaneCommunityCard.id.includes('-war-flip-community-r')) {
     newOutOfPlay = [...newOutOfPlay, state.allLaneCommunityCard];
   }
   const beforeRound: GameState = {
@@ -1791,7 +1999,7 @@ function handleSuddenDeathStep(state: GameState): GameState {
     else if (v2 > v1) winner = 2;
   }
 
-  return { ...state, phase: 'Finished', winner: winner || 1, lanes: createEmptyLanes(), outOfPlayPile: allCards, sharedDeck: [] };
+  return { ...state, phase: 'Finished', winner: winner || 1, lanes: createEmptyLanes(), outOfPlayPile: allCards, player1Deck: [], player2Deck: [], communityDeck: [] };
 }
 
 export function canPlayCardToLane(state: GameState, cardId: string, laneId: LaneId): boolean {
@@ -1826,7 +2034,8 @@ export function canEndTurn(state: GameState): boolean {
     return playerSide.cards.length < MAX_CARDS_PER_LANE;
   });
   
-  // Can end turn if: played 3 cards, played at least 1 and hand is empty,
+  // Can end turn if: played 3 cards, your hand is empty (nothing left to play),
   // or there are no legal community lanes left to play into.
-  return played3Cards || (playedAtLeast1 && handIsEmpty) || !hasPlayableLane;
+  void playedAtLeast1;
+  return played3Cards || handIsEmpty || !hasPlayableLane;
 }
